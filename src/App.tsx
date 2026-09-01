@@ -19,6 +19,8 @@ import {
 import type { ComponentType } from "react";
 import { NavLink, Route, Routes } from "react-router";
 import { lineup, movers, news } from "./data";
+import RankingsPage from "./features/rankings/RankingsPage";
+import ResearchDeskPage from "./features/research/ResearchDeskPage";
 
 type Icon = ComponentType<{ size?: number; strokeWidth?: number }>;
 
@@ -116,9 +118,9 @@ function AppShell() {
           <Route index element={<Huddle />} />
           <Route path="team" element={<ComingSoon title="My Team" icon={Users} />} />
           <Route path="players" element={<ComingSoon title="Players" icon={Search} />} />
-          <Route path="rankings" element={<ComingSoon title="Consensus Rankings" icon={Trophy} />} />
+          <Route path="rankings" element={<RankingsPage />} />
           <Route path="draft" element={<ComingSoon title="Draft Board" icon={ClipboardList} />} />
-          <Route path="research" element={<ComingSoon title="Research Desk" icon={Bot} />} />
+          <Route path="research" element={<ResearchDeskPage />} />
         </Routes>
       </main>
       <nav className="mobile-nav" aria-label="Mobile navigation">

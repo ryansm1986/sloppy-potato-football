@@ -1,0 +1,35 @@
+export type AgentRankingEntry = {
+  id: string;
+  playerId: string | null;
+  playerName: string;
+  position: string | null;
+  team: string | null;
+  rank: number;
+  previousRank: number | null;
+  tier: number | null;
+  insight: string | null;
+};
+
+export type AgentRankingSnapshot = {
+  id: string;
+  source: { id: string; canonicalKey: string; name: string; slug: string; kind: "agent" | "import" | "derived" | "external" | "custom"; provider: string | null };
+  title: string;
+  scoringFormat: string;
+  rankingType: string;
+  season: string;
+  week: number | null;
+  generatedAt: string;
+  summary: string | null;
+  methodology: string | null;
+  entries: AgentRankingEntry[];
+};
+
+export async function fetchAgentRankings(signal?: AbortSignal): Promise<AgentRankingSnapshot[]> {
+  const response = await fetch("/api/rankings/snapshots?limit=5", {
+    headers: { Accept: "application/json" },
+    signal,
+  });
+  if (!response.ok) throw new Error(`Ranking snapshots returned ${response.status}`);
+  const payload = await response.json() as { snapshots?: AgentRankingSnapshot[] };
+  return payload.snapshots ?? [];
+}

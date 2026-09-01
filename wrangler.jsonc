@@ -1,10 +1,21 @@
 {
-  "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "sloppy-potato-fantasy-football",
-  "compatibility_date": "2026-09-01",
-  "main": "./worker/index.ts",
-  "assets": {
-    "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
-  }
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "sloppy-potato-fantasy-football",
+	"compatibility_date": "2026-09-01",
+	"main": "./worker/index.ts",
+	"assets": {
+		"not_found_handling": "single-page-application",
+		"run_worker_first": [
+			"/api/*"
+		]
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "sloppy-potato-football-db",
+			"database_id": "02bd15bf-1fa7-432f-b706-ff6a672e6fb4",
+			"preview_database_id": "sloppy-potato-football-local",
+			"migrations_dir": "migrations"
+		}
+	]
 }
