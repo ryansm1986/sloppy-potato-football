@@ -3,6 +3,7 @@ import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import RankingsPage from "./RankingsPage";
 import { RESEARCH_OWNER_TOKEN_KEY } from "../research/research-api";
+import { RANKINGS_PREFERENCES_STORAGE_KEY } from "./ranking-preferences";
 
 const agentSnapshot = {
   id: "snapshot-1",
@@ -104,6 +105,47 @@ describe("RankingsPage", () => {
     expect(screen.getByRole("button", { name: "Show my board first" })).toBeInTheDocument();
     fireEvent.click(expand);
     expect(screen.getByRole("button", { name: "Remove Codex Rank Agent from favorites" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("resizes the split workspace by pointer and keyboard and persists the divider ratio", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ snapshots: [] })));
+    render(<MemoryRouter><RankingsPage /></MemoryRouter>);
+
+    expect(await screen.findByText("No agent snapshots yet")).toBeInTheDocument();
+    expect(screen.queryByRole("separator", { name: "Resize rankings workspaces" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Split" }));
+
+    const divider = screen.getByRole("separator", { name: "Resize rankings workspaces" });
+    const workspace = divider.parentElement!;
+    expect(divider).toHaveAttribute("aria-valuenow", "65");
+    expect(divider).toHaveAttribute("aria-valuetext", "My Rankings uses 65% of the workspace");
+    expect(workspace.style.getPropertyValue("--workspace-leading-size")).toBe("65fr");
+
+    fireEvent.keyDown(divider, { key: "ArrowLeft" });
+    expect(divider).toHaveAttribute("aria-valuenow", "63");
+    fireEvent.keyDown(divider, { key: "End" });
+    expect(divider).toHaveAttribute("aria-valuenow", "70");
+
+    Object.defineProperty(workspace, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({ bottom: 600, height: 600, left: 0, right: 1000, top: 0, width: 1000, x: 0, y: 0, toJSON: () => ({}) }),
+    });
+    Object.defineProperty(divider, "setPointerCapture", { configurable: true, value: vi.fn() });
+    Object.defineProperty(divider, "hasPointerCapture", { configurable: true, value: () => false });
+    fireEvent.pointerDown(divider, { button: 0, clientX: 700, pointerId: 1 });
+    expect(divider).toHaveFocus();
+    fireEvent.pointerMove(divider, { clientX: 420, pointerId: 1 });
+    fireEvent.pointerUp(divider, { clientX: 420, pointerId: 1 });
+    expect(divider).toHaveAttribute("aria-valuenow", "42");
+    expect(JSON.parse(window.localStorage.getItem(RANKINGS_PREFERENCES_STORAGE_KEY) ?? "{}")).toMatchObject({
+      layout: "split",
+      splitRatio: 42,
+    });
+
+    fireEvent.doubleClick(divider);
+    expect(divider).toHaveAttribute("aria-valuenow", "65");
+    fireEvent.click(screen.getByRole("button", { name: "Stacked" }));
+    expect(screen.queryByRole("separator", { name: "Resize rankings workspaces" })).not.toBeInTheDocument();
   });
 
   it("switches between aggregate and individual expert lists with numbered expandable rows", async () => {

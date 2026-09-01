@@ -40,7 +40,7 @@ import {
   TrendingDown,
   TrendingUp,
 } from "lucide-react";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
 import { NavLink } from "react-router";
 import {
   fetchResearchJobs,
@@ -55,6 +55,10 @@ import {
   type AggregatedRankingEntry,
 } from "./ranking-aggregate";
 import {
+  clampRankingsSplitRatio,
+  DEFAULT_RANKINGS_SPLIT_RATIO,
+  MAX_RANKINGS_SPLIT_RATIO,
+  MIN_RANKINGS_SPLIT_RATIO,
   loadRankingsPreferences,
   saveRankingsPreferences,
   toggleFavoriteSource,
@@ -72,6 +76,78 @@ import {
 } from "./ranking-store";
 
 const positions = ["ALL", "QB", "RB", "WR", "TE"] as const;
+
+type WorkspaceDividerProps = {
+  leftWorkspaceName: string;
+  ratio: number;
+  onRatioChange: (ratio: number) => void;
+};
+
+function WorkspaceDivider({ leftWorkspaceName, ratio, onRatioChange }: WorkspaceDividerProps) {
+  const draggingRef = useRef(false);
+
+  function updateFromPointer(event: PointerEvent<HTMLDivElement>) {
+    const bounds = event.currentTarget.parentElement?.getBoundingClientRect();
+    if (!bounds || bounds.width <= 0) return;
+    onRatioChange(clampRankingsSplitRatio(((event.clientX - bounds.left) / bounds.width) * 100));
+  }
+
+  function handlePointerDown(event: PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.currentTarget.focus();
+    draggingRef.current = true;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
+
+  function handlePointerMove(event: PointerEvent<HTMLDivElement>) {
+    if (draggingRef.current) updateFromPointer(event);
+  }
+
+  function stopDragging(event: PointerEvent<HTMLDivElement>) {
+    draggingRef.current = false;
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    const step = event.shiftKey ? 5 : 2;
+    let nextRatio: number | null = null;
+    if (event.key === "ArrowLeft") nextRatio = ratio - step;
+    if (event.key === "ArrowRight") nextRatio = ratio + step;
+    if (event.key === "Home") nextRatio = MIN_RANKINGS_SPLIT_RATIO;
+    if (event.key === "End") nextRatio = MAX_RANKINGS_SPLIT_RATIO;
+    if (nextRatio === null) return;
+    event.preventDefault();
+    onRatioChange(clampRankingsSplitRatio(nextRatio));
+  }
+
+  return (
+    <div
+      aria-label="Resize rankings workspaces"
+      aria-orientation="vertical"
+      aria-valuemax={MAX_RANKINGS_SPLIT_RATIO}
+      aria-valuemin={MIN_RANKINGS_SPLIT_RATIO}
+      aria-valuenow={ratio}
+      aria-valuetext={`${leftWorkspaceName} uses ${ratio}% of the workspace`}
+      className="workspace-divider"
+      onDoubleClick={() => onRatioChange(DEFAULT_RANKINGS_SPLIT_RATIO)}
+      onKeyDown={handleKeyDown}
+      onLostPointerCapture={() => { draggingRef.current = false; }}
+      onPointerCancel={stopDragging}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={stopDragging}
+      role="separator"
+      tabIndex={0}
+      title="Drag to resize. Use arrow keys for precise control; double-click to reset."
+    >
+      <span aria-hidden="true"><GripVertical size={13} /></span>
+      <small aria-hidden="true">Separate workspace</small>
+    </div>
+  );
+}
 
 function relativeTime(value: string): string {
   const milliseconds = Date.now() - new Date(value).getTime();
@@ -776,6 +852,14 @@ export default function RankingsPage() {
     </section>
   );
 
+  const personalFirst = preferences.sectionOrder === "personal-first";
+  const leftWorkspace = personalFirst ? personalWorkspace : agentWorkspace;
+  const rightWorkspace = personalFirst ? agentWorkspace : personalWorkspace;
+  const workspaceStyle = {
+    "--workspace-leading-size": `${preferences.splitRatio}fr`,
+    "--workspace-trailing-size": `${100 - preferences.splitRatio}fr`,
+  } as CSSProperties;
+
   return (
     <div className="page rankings-page">
       <header className="page-header rankings-header">
@@ -809,8 +893,16 @@ export default function RankingsPage() {
         </button>
       </section>
 
-      <div className={`rankings-workspace rankings-workspace--${preferences.layout}`}>
-        {preferences.sectionOrder === "personal-first" ? <>{personalWorkspace}{agentWorkspace}</> : <>{agentWorkspace}{personalWorkspace}</>}
+      <div className={`rankings-workspace rankings-workspace--${preferences.layout}`} style={workspaceStyle}>
+        {leftWorkspace}
+        {preferences.layout === "split" && (
+          <WorkspaceDivider
+            leftWorkspaceName={personalFirst ? "My Rankings" : "Agent Rankings"}
+            ratio={preferences.splitRatio}
+            onRatioChange={(splitRatio) => updatePreferences({ splitRatio })}
+          />
+        )}
+        {rightWorkspace}
       </div>
 
       {pendingCopy && (

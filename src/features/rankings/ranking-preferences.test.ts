@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   RANKINGS_PREFERENCES_STORAGE_KEY,
+  clampRankingsSplitRatio,
   defaultRankingsPreferences,
   loadRankingsPreferences,
   saveRankingsPreferences,
@@ -21,6 +22,7 @@ describe("rankings view preferences", () => {
     saveRankingsPreferences(storage, {
       layout: "split",
       sectionOrder: "agent-first",
+      splitRatio: 42,
       agentCollapsed: true,
       favoriteSourceKeys: ["agent:codex-rank-agent", "agent:codex-rank-agent"],
     });
@@ -29,9 +31,19 @@ describe("rankings view preferences", () => {
     expect(loadRankingsPreferences(storage)).toEqual({
       layout: "split",
       sectionOrder: "agent-first",
+      splitRatio: 42,
       agentCollapsed: true,
       favoriteSourceKeys: ["agent:codex-rank-agent"],
     });
+  });
+
+  it("defaults and clamps persisted split ratios to keep both workspaces usable", () => {
+    expect(clampRankingsSplitRatio(Number.NaN)).toBe(65);
+    expect(clampRankingsSplitRatio(12)).toBe(30);
+    expect(clampRankingsSplitRatio(87)).toBe(70);
+    expect(loadRankingsPreferences({
+      getItem: () => JSON.stringify({ layout: "split", splitRatio: 99 }),
+    }).splitRatio).toBe(70);
   });
 
   it("toggles favorite sources by stable slug", () => {
