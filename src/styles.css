@@ -434,6 +434,7 @@ tbody tr:hover { background: rgba(255, 255, 255, .015); }
 .status-pill--snapshot { color: var(--amber); border-color: rgba(245, 158, 11, .25); }
 .status-pill--complete { color: var(--green); }
 .status-pill--offline { color: var(--amber); border-color: rgba(245, 158, 11, .25); background: var(--amber-soft); }
+.status-pill--locked { color: #c6a96b; border-color: rgba(198, 169, 107, .25); background: rgba(198, 169, 107, .07); }
 .status-pill--online { color: var(--green); border-color: rgba(72, 199, 142, .25); background: rgba(72, 199, 142, .07); }
 .status-pill--busy { color: var(--amber); border-color: rgba(245, 158, 11, .3); background: var(--amber-soft); }
 .status-pill--stale { color: #e2b96b; border-color: rgba(226, 185, 107, .25); }
@@ -560,6 +561,7 @@ tbody tr:hover { background: rgba(255, 255, 255, .015); }
 .runner-card > p { margin: 12px 0 0; color: var(--muted); font-size: 8px; line-height: 1.55; }
 .runner-card--online { border-color: rgba(72, 199, 142, .18); }
 .runner-card--busy { border-color: rgba(245, 158, 11, .28); }
+.runner-card--locked { border-color: rgba(198, 169, 107, .2); }
 .owner-token-card { padding: 14px; }
 .owner-token-card > header { display: flex; align-items: center; gap: 9px; margin-bottom: 11px; }
 .owner-token-card > header > svg { color: var(--amber); }

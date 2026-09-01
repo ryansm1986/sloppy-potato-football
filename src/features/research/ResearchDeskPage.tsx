@@ -29,6 +29,7 @@ import {
   fetchRunnerStatus,
   isLocalDevelopment,
   RESEARCH_OWNER_TOKEN_KEY,
+  ResearchApiError,
   retryResearchJob,
   runnerDisplayState,
   type ResearchJob,
@@ -37,6 +38,9 @@ import {
   type RunnerState,
   type RunnerStatus,
 } from "./research-api";
+
+type BridgeAccessState = "locked" | "checking" | "authorized" | "denied";
+type RunnerDisplayState = RunnerState | "locked";
 
 const JOB_TYPE_LABELS: Record<ResearchJobType, string> = {
   source_refresh: "Source refresh",
@@ -74,9 +78,10 @@ function JobStatusIcon({ status }: { status: ResearchJobStatus }) {
   return <CircleDashed size={15} />;
 }
 
-function RunnerIcon({ state }: { state: RunnerState }) {
+function RunnerIcon({ state }: { state: RunnerDisplayState }) {
   if (state === "online" || state === "busy") return <Wifi size={12} />;
   if (state === "stale") return <Clock3 size={12} />;
+  if (state === "locked") return <KeyRound size={12} />;
   return <WifiOff size={12} />;
 }
 
@@ -115,6 +120,8 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
   const localDevelopment = localDevelopmentOverride ?? isLocalDevelopment();
   const [ownerToken, setOwnerToken] = useState(loadToken);
   const [tokenDraft, setTokenDraft] = useState(loadToken);
+  const [accessState, setAccessState] = useState<BridgeAccessState>(() => localDevelopment || Boolean(ownerToken) ? "checking" : "locked");
+  const [tokenRevision, setTokenRevision] = useState(0);
   const [jobType, setJobType] = useState<ResearchJobType>(favoriteSource ? "source_refresh" : "player_research");
   const [subject, setSubject] = useState("");
   const [source, setSource] = useState(favoriteSource);
@@ -127,8 +134,9 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
   const [isLoading, setIsLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [retryingId, setRetryingId] = useState<string | null>(null);
-  const authorized = localDevelopment || Boolean(ownerToken);
-  const runnerState = runnerDisplayState(runner);
+  const canAttemptAccess = localDevelopment || Boolean(ownerToken);
+  const authorized = accessState === "authorized";
+  const runnerState: RunnerDisplayState = authorized ? runnerDisplayState(runner) : "locked";
 
   const canSubmit = useMemo(() => {
     if (!authorized || isSubmitting) return false;
@@ -138,7 +146,7 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
   }, [authorized, isSubmitting, jobType, source, subject]);
 
   const refreshBridge = useCallback(async (signal?: AbortSignal) => {
-    if (!authorized) return;
+    if (!canAttemptAccess) return;
     setIsLoading(true);
     try {
       const [nextJobs, nextRunner] = await Promise.all([
@@ -147,14 +155,22 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
       ]);
       setJobs(nextJobs);
       setRunner(nextRunner);
+      setAccessState("authorized");
       setPollError(null);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
-      setPollError(error instanceof Error ? error.message : "Could not reach the research bridge.");
+      if (error instanceof ResearchApiError && (error.status === 401 || error.status === 403)) {
+        setAccessState("denied");
+        setJobs([]);
+        setRunner(null);
+        setPollError("Owner token rejected. Replace it below and save again.");
+      } else {
+        setPollError(error instanceof Error ? error.message : "Could not reach the research bridge.");
+      }
     } finally {
       if (!signal?.aborted) setIsLoading(false);
     }
-  }, [authorized, ownerToken]);
+  }, [canAttemptAccess, ownerToken]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -163,7 +179,7 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
   }, []);
 
   useEffect(() => {
-    if (!authorized) return;
+    if (!canAttemptAccess) return;
     const controller = new AbortController();
     void refreshBridge(controller.signal);
     const timer = window.setInterval(() => void refreshBridge(controller.signal), 10_000);
@@ -171,13 +187,18 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
       controller.abort();
       window.clearInterval(timer);
     };
-  }, [authorized, refreshBridge]);
+  }, [canAttemptAccess, refreshBridge, tokenRevision]);
 
   function saveToken() {
     const cleanToken = tokenDraft.trim();
     if (cleanToken) window.localStorage.setItem(RESEARCH_OWNER_TOKEN_KEY, cleanToken);
     else window.localStorage.removeItem(RESEARCH_OWNER_TOKEN_KEY);
     setOwnerToken(cleanToken);
+    setAccessState(localDevelopment || cleanToken ? "checking" : "locked");
+    setJobs([]);
+    setRunner(null);
+    setPollError(null);
+    setTokenRevision((current) => current + 1);
     setNotice(cleanToken ? "Owner token saved only in this browser." : "Owner token removed from this browser.");
   }
 
@@ -187,6 +208,9 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
     setOwnerToken("");
     setJobs([]);
     setRunner(null);
+    setAccessState(localDevelopment ? "checking" : "locked");
+    setPollError(null);
+    setTokenRevision((current) => current + 1);
     setNotice("Owner token removed from this browser.");
   }
 
@@ -335,7 +359,7 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
               <div><dt>Jobs today</dt><dd>{runner?.jobsToday ?? 0}</dd></div>
               <div><dt>Auto-run</dt><dd>{runner?.autoRun ? "On" : "Off"}</dd></div>
             </dl>
-            <p>{runnerState === "busy" ? "The runner is processing a claimed assignment." : runnerState === "online" ? "The runner is ready to claim the next queued assignment." : runnerState === "stale" ? "The last heartbeat is over a minute old. Check the local runner process." : "Start the local runner to process queued work. Jobs stay safely stored while it is offline."}</p>
+            <p>{runnerState === "busy" ? "The runner is processing a claimed assignment." : runnerState === "online" ? "The runner is ready to claim the next queued assignment." : runnerState === "stale" ? "The last heartbeat is over a minute old. Check the local runner process." : runnerState === "offline" ? "The bridge is authorized, but the local runner is offline. Start it to process queued work." : accessState === "denied" ? "This owner token was rejected. Replace it below and save again to unlock runner status." : ownerToken ? "Verifying the saved owner token. Replace it below if access stays locked." : "Save your owner token below to unlock runner status and the private queue."}</p>
           </section>
 
           <section className="panel owner-token-card">
