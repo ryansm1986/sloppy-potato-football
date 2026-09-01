@@ -1,0 +1,122 @@
+export const RESEARCH_OWNER_TOKEN_KEY = "spff:research-owner-token:v1";
+
+export type ResearchJobType = "source_refresh" | "player_research" | "rankings_research";
+export type ResearchJobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type RunnerState = "online" | "busy" | "stale" | "offline";
+
+export type ResearchJob = {
+  id: string;
+  type: ResearchJobType;
+  status: ResearchJobStatus;
+  subject: string | null;
+  sourceName: string | null;
+  scoringFormat: string;
+  rankingType: string;
+  position: string | null;
+  createdAt: string;
+  updatedAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  attempts: number;
+  error: string | null;
+};
+
+export type RunnerStatus = {
+  state: RunnerState;
+  provider: string | null;
+  lastSeenAt: string | null;
+  currentJobId: string | null;
+  jobsToday: number;
+  autoRun: boolean;
+};
+
+export type CreateResearchJob = {
+  type: ResearchJobType;
+  subject?: string;
+  sourceName?: string;
+  scoringFormat: "ppr";
+  rankingType: "redraft";
+  position?: "ALL" | "QB" | "RB" | "WR" | "TE";
+};
+
+export class ResearchApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "ResearchApiError";
+  }
+}
+
+function authHeaders(token: string, includeJson = false): HeadersInit {
+  return {
+    Accept: "application/json",
+    ...(includeJson ? { "Content-Type": "application/json" } : {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
+async function parseError(response: Response): Promise<ResearchApiError> {
+  let message = `Research service returned ${response.status}`;
+  try {
+    const payload = await response.json() as { error?: string; message?: string };
+    message = payload.message ?? payload.error ?? message;
+  } catch {
+    // An HTML or empty error response still gets a useful status message.
+  }
+  return new ResearchApiError(message, response.status);
+}
+
+export async function fetchResearchJobs(token: string, signal?: AbortSignal): Promise<ResearchJob[]> {
+  const response = await fetch("/api/research/jobs?limit=20", {
+    headers: authHeaders(token),
+    signal,
+  });
+  if (!response.ok) throw await parseError(response);
+  const payload = await response.json() as { jobs?: ResearchJob[] } | ResearchJob[];
+  return Array.isArray(payload) ? payload : payload.jobs ?? [];
+}
+
+export async function fetchRunnerStatus(token: string, signal?: AbortSignal): Promise<RunnerStatus> {
+  const response = await fetch("/api/research/runner/status", {
+    headers: authHeaders(token),
+    signal,
+  });
+  if (!response.ok) throw await parseError(response);
+  const payload = await response.json() as { runner?: RunnerStatus; status?: RunnerStatus } | RunnerStatus;
+  if ("runner" in payload && payload.runner) return payload.runner;
+  if ("status" in payload && typeof payload.status === "object" && payload.status) return payload.status;
+  return payload as RunnerStatus;
+}
+
+export async function createResearchJob(token: string, input: CreateResearchJob): Promise<ResearchJob> {
+  const response = await fetch("/api/research/jobs", {
+    method: "POST",
+    headers: authHeaders(token, true),
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throw await parseError(response);
+  const payload = await response.json() as { job?: ResearchJob } | ResearchJob;
+  return "job" in payload && payload.job ? payload.job : payload as ResearchJob;
+}
+
+export async function retryResearchJob(token: string, jobId: string): Promise<ResearchJob> {
+  const response = await fetch(`/api/research/jobs/${encodeURIComponent(jobId)}/retry`, {
+    method: "POST",
+    headers: authHeaders(token, true),
+  });
+  if (!response.ok) throw await parseError(response);
+  const payload = await response.json() as { job?: ResearchJob } | ResearchJob;
+  return "job" in payload && payload.job ? payload.job : payload as ResearchJob;
+}
+
+export function isLocalDevelopment(): boolean {
+  return window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+}
+
+export function runnerDisplayState(runner: RunnerStatus | null, now = Date.now()): RunnerState {
+  if (!runner || runner.state === "offline") return "offline";
+  if (runner.lastSeenAt) {
+    const lastSeen = Date.parse(runner.lastSeenAt);
+    if (Number.isFinite(lastSeen) && now - lastSeen > 60_000) return "stale";
+  }
+  return runner.state;
+}

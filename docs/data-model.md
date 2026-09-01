@@ -106,3 +106,24 @@ Protected source and snapshot routes:
 - `POST /api/rankings/snapshots` — validate and ingest one completed agent/import run
 
 `ranking_lists` and `ranking_list_entries` provide indexed owner-scoped storage for future cloud-saved personal rankings. They intentionally have no public write API yet. Once Cloudflare Access is configured, `owner_identity` must come from the verified issuer-qualified subject, never an email or owner value sent by the browser.
+
+## Research runner bridge
+
+The research bridge stores durable, auditable work separately from immutable ranking snapshots:
+
+```text
+research_runners
+research_jobs
+â””â”€â”€ research_job_events
+      â””â”€â”€ optional ranking_snapshots result
+```
+
+Owner routes require `RESEARCH_OWNER_TOKEN`; runner routes require the separate `AGENT_RUNNER_TOKEN`. Only localhost bypasses missing bridge secrets. A browser can create only bounded `player_research`, `rankings_research`, or `source_refresh` jobsâ€”it cannot relay a freeform prompt or command. The Worker builds the execution context, leases work for 15 minutes, retries recoverable failures up to three times, and records every queue, claim, retry, failure, and completion event.
+
+The runner sends heartbeats and polls over outbound HTTPS. It executes Codex in a dedicated temporary directory with a read-only sandbox, live web search, user configuration and project rules disabled, a time limit, and a strict output schema. Results are validated locally and again by the Worker. For ranking results, the Worker ignores runner-supplied canonical IDs, derives the canonical source from the protected job and registered provider, and forces `external_run_id` to the research job ID so completion retries are idempotent.
+
+Bridge routes:
+
+- `POST /api/research/jobs`, `GET /api/research/jobs`, `GET /api/research/jobs/:jobId`, and `POST /api/research/jobs/:jobId/retry`
+- `GET /api/research/runner/status`
+- `POST /api/runners/heartbeat`, `POST /api/runners/jobs/claim`, `POST /api/runners/jobs/:jobId/result`, and `POST /api/runners/jobs/:jobId/fail`

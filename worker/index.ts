@@ -27,11 +27,30 @@ import {
   rankingSourceRegistryInput,
   resolveOrCreateRankingSource,
 } from "./services/ranking-sources";
+import {
+  ResearchBridgeError,
+  claimResearchJob,
+  claimResearchJobInput,
+  completeResearchJob,
+  completeResearchJobInput,
+  createResearchJob,
+  createResearchJobInput,
+  failResearchJob,
+  failResearchJobInput,
+  getResearchJob,
+  getRunnerStatus,
+  heartbeatRunner,
+  listResearchJobs,
+  retryResearchJob,
+  runnerHeartbeatInput,
+} from "./services/research-bridge";
 
 type Bindings = {
   DB: D1Database;
   SLEEPER_API_BASE_URL?: string;
   IMPORT_ADMIN_TOKEN?: string;
+  RESEARCH_OWNER_TOKEN?: string;
+  AGENT_RUNNER_TOKEN?: string;
 };
 
 const app = new Hono<{ Bindings: Bindings }>();
@@ -55,8 +74,46 @@ const requireImportToken = createMiddleware<{ Bindings: Bindings }>(async (conte
   return next();
 });
 
+function isLocalRequest(url: string) {
+  return ["localhost", "127.0.0.1", "0.0.0.0", "::1"].includes(new URL(url).hostname);
+}
+
+const requireResearchOwner = createMiddleware<{ Bindings: Bindings }>(async (context, next) => {
+  const configuredToken = context.env.RESEARCH_OWNER_TOKEN;
+  if (!configuredToken && isLocalRequest(context.req.url)) return next();
+  if (!configuredToken) {
+    return context.json(
+      { error: "research_auth_not_configured", message: "Research jobs are disabled until an owner token is configured." },
+      503,
+    );
+  }
+  const supplied = context.req.header("X-Research-Owner-Token")
+    ?? context.req.header("Authorization")?.replace(/^Bearer\s+/i, "");
+  if (supplied !== configuredToken) {
+    return context.json({ error: "unauthorized", message: "A valid research owner token is required." }, 401);
+  }
+  return next();
+});
+
+const requireAgentRunner = createMiddleware<{ Bindings: Bindings }>(async (context, next) => {
+  const configuredToken = context.env.AGENT_RUNNER_TOKEN;
+  if (!configuredToken && isLocalRequest(context.req.url)) return next();
+  if (!configuredToken) {
+    return context.json(
+      { error: "runner_auth_not_configured", message: "Runner access is disabled until a runner token is configured." },
+      503,
+    );
+  }
+  if (context.req.header("Authorization") !== `Bearer ${configuredToken}`) {
+    return context.json({ error: "unauthorized", message: "A valid agent runner token is required." }, 401);
+  }
+  return next();
+});
+
 app.use("/api/imports/*", requireImportToken);
 app.use("/api/leagues/:leagueId/sync", requireImportToken);
+app.use("/api/research/*", requireResearchOwner);
+app.use("/api/runners/*", requireAgentRunner);
 
 function database(context: { env: Bindings }) {
   return drizzle(context.env.DB, { schema });
@@ -237,6 +294,83 @@ app.post("/api/rankings/snapshots", requireImportToken, async (context) => {
   return context.json(result, result.created ? 201 : 200);
 });
 
+app.post("/api/research/jobs", async (context) => {
+  const body = await context.req.json().catch(() => null);
+  const input = createResearchJobInput.safeParse(body);
+  if (!input.success) {
+    return context.json(
+      { error: "invalid_request", message: input.error.issues[0]?.message ?? "Invalid research job" },
+      400,
+    );
+  }
+  const suppliedIdempotencyKey = context.req.header("Idempotency-Key")?.trim();
+  if (suppliedIdempotencyKey && !/^[A-Za-z0-9._:-]{3,128}$/.test(suppliedIdempotencyKey)) {
+    return context.json({ error: "invalid_request", message: "Invalid Idempotency-Key header" }, 400);
+  }
+  const result = await createResearchJob(
+    database(context),
+    input.data,
+    suppliedIdempotencyKey ?? crypto.randomUUID(),
+  );
+  return context.json({ job: result.job }, result.created ? 201 : 200);
+});
+
+app.get("/api/research/jobs", async (context) => {
+  const requestedLimit = Number(context.req.query("limit") ?? 20);
+  const limit = Number.isFinite(requestedLimit)
+    ? Math.min(Math.max(Math.trunc(requestedLimit), 1), 100)
+    : 20;
+  return context.json({ jobs: await listResearchJobs(database(context), limit) });
+});
+
+app.get("/api/research/jobs/:jobId", async (context) => {
+  return context.json(await getResearchJob(database(context), context.req.param("jobId")));
+});
+
+app.post("/api/research/jobs/:jobId/retry", async (context) => {
+  return context.json({ job: await retryResearchJob(database(context), context.req.param("jobId")) });
+});
+
+app.get("/api/research/runner/status", async (context) => {
+  return context.json({ runner: await getRunnerStatus(database(context)) });
+});
+
+app.post("/api/runners/heartbeat", async (context) => {
+  const body = await context.req.json().catch(() => null);
+  const input = runnerHeartbeatInput.safeParse(body);
+  if (!input.success) {
+    return context.json({ error: "invalid_request", message: input.error.issues[0]?.message ?? "Invalid runner heartbeat" }, 400);
+  }
+  return context.json({ runner: await heartbeatRunner(database(context), input.data) });
+});
+
+app.post("/api/runners/jobs/claim", async (context) => {
+  const body = await context.req.json().catch(() => null);
+  const input = claimResearchJobInput.safeParse(body);
+  if (!input.success) {
+    return context.json({ error: "invalid_request", message: input.error.issues[0]?.message ?? "Invalid job claim" }, 400);
+  }
+  return context.json({ job: await claimResearchJob(database(context), input.data.runnerId) });
+});
+
+app.post("/api/runners/jobs/:jobId/result", async (context) => {
+  const body = await context.req.json().catch(() => null);
+  const input = completeResearchJobInput.safeParse(body);
+  if (!input.success) {
+    return context.json({ error: "invalid_request", message: input.error.issues[0]?.message ?? "Invalid research result" }, 400);
+  }
+  return context.json(await completeResearchJob(database(context), context.req.param("jobId"), input.data));
+});
+
+app.post("/api/runners/jobs/:jobId/fail", async (context) => {
+  const body = await context.req.json().catch(() => null);
+  const input = failResearchJobInput.safeParse(body);
+  if (!input.success) {
+    return context.json({ error: "invalid_request", message: input.error.issues[0]?.message ?? "Invalid research failure" }, 400);
+  }
+  return context.json({ job: await failResearchJob(database(context), context.req.param("jobId"), input.data) });
+});
+
 app.onError((error, context) => {
   console.error("request_failed", {
     path: context.req.path,
@@ -274,6 +408,17 @@ app.onError((error, context) => {
 
   if (error instanceof RankingSourceRegistryError) {
     return context.json({ error: error.code, message: error.message }, 409);
+  }
+
+  if (error instanceof ResearchBridgeError) {
+    return context.json({ error: error.code, message: error.message }, error.status);
+  }
+
+  if (error instanceof z.ZodError) {
+    return context.json(
+      { error: "invalid_result", message: error.issues[0]?.message ?? "The runner returned an invalid result" },
+      422,
+    );
   }
 
   return context.json(

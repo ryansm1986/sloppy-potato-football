@@ -50,7 +50,7 @@ export const rankingSnapshotInput = z.object({
   rankingType: z.enum(["redraft", "weekly", "rest_of_season", "dynasty", "rookie"]),
   season: z.string().regex(/^20\d{2}$/),
   week: z.number().int().min(1).max(25).nullish(),
-  generatedAt: z.string().datetime(),
+  generatedAt: z.string().datetime({ offset: true }),
   summary: z.string().trim().max(1_500).nullish(),
   methodology: z.string().trim().max(2_000).nullish(),
   entries: z.array(entryInput).min(1).max(500),

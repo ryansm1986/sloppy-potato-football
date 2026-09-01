@@ -416,6 +416,70 @@ export const rankingListEntries = sqliteTable(
   ],
 );
 
+export const researchRunners = sqliteTable(
+  "research_runners",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    provider: text("provider").notNull(),
+    version: text("version"),
+    status: text("status").notNull().default("online"),
+    capabilitiesJson: text("capabilities_json").notNull().default("[]"),
+    currentJobId: text("current_job_id"),
+    lastSeenAt: integer("last_seen_at", { mode: "timestamp_ms" }).notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().default(nowMs),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull().default(nowMs),
+  },
+  (table) => [index("research_runners_last_seen_idx").on(table.lastSeenAt, table.status)],
+);
+
+export const researchJobs = sqliteTable(
+  "research_jobs",
+  {
+    id: text("id").primaryKey(),
+    ownerIdentity: text("owner_identity").notNull(),
+    jobType: text("job_type").notNull(),
+    status: text("status").notNull().default("queued"),
+    priority: integer("priority").notNull().default(0),
+    taskInputJson: text("task_input_json").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    maxAttempts: integer("max_attempts").notNull().default(3),
+    leasedByRunnerId: text("leased_by_runner_id").references(() => researchRunners.id, { onDelete: "set null" }),
+    leaseToken: text("lease_token"),
+    leaseExpiresAt: integer("lease_expires_at", { mode: "timestamp_ms" }),
+    completionKey: text("completion_key"),
+    resultJson: text("result_json"),
+    rankingSnapshotId: text("ranking_snapshot_id").references(() => rankingSnapshots.id, { onDelete: "set null" }),
+    errorCode: text("error_code"),
+    errorMessage: text("error_message"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().default(nowMs),
+    startedAt: integer("started_at", { mode: "timestamp_ms" }),
+    completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull().default(nowMs),
+  },
+  (table) => [
+    uniqueIndex("research_jobs_owner_idempotency_unique").on(table.ownerIdentity, table.idempotencyKey),
+    index("research_jobs_queue_idx").on(table.status, table.priority, table.createdAt),
+    index("research_jobs_owner_created_idx").on(table.ownerIdentity, table.createdAt),
+    index("research_jobs_lease_idx").on(table.status, table.leaseExpiresAt),
+  ],
+);
+
+export const researchJobEvents = sqliteTable(
+  "research_job_events",
+  {
+    id: text("id").primaryKey(),
+    jobId: text("job_id").notNull().references(() => researchJobs.id, { onDelete: "cascade" }),
+    eventType: text("event_type").notNull(),
+    actorType: text("actor_type").notNull(),
+    actorId: text("actor_id"),
+    detailsJson: text("details_json").notNull().default("{}"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().default(nowMs),
+  },
+  (table) => [index("research_job_events_job_created_idx").on(table.jobId, table.createdAt)],
+);
+
 export type Player = typeof players.$inferSelect;
 export type NewPlayer = typeof players.$inferInsert;
 export type League = typeof leagues.$inferSelect;
