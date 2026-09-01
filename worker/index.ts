@@ -20,6 +20,7 @@ import {
   createRankingSnapshot,
   getRankingSnapshots,
   rankingSnapshotInput,
+  rankingSnapshotQueryInput,
 } from "./services/ranking-snapshots";
 import {
   RankingSourceRegistryError,
@@ -254,9 +255,28 @@ app.get("/api/players/:playerId", async (context) => {
 app.get("/api/rankings/snapshots", async (context) => {
   const requestedLimit = Number(context.req.query("limit") ?? 5);
   const limit = Number.isFinite(requestedLimit)
-    ? Math.min(Math.max(Math.trunc(requestedLimit), 1), 20)
+    ? Math.min(Math.max(Math.trunc(requestedLimit), 1), 100)
     : 5;
-  return context.json({ snapshots: await getRankingSnapshots(database(context), limit) });
+  const weekValue = context.req.query("week");
+  const latestPerSourceValue = context.req.query("latestPerSource");
+  const query = rankingSnapshotQueryInput.safeParse({
+    scoringFormat: context.req.query("scoringFormat"),
+    rankingType: context.req.query("rankingType"),
+    season: context.req.query("season"),
+    week: weekValue === undefined ? undefined : weekValue === "null" ? null : Number(weekValue),
+    position: context.req.query("position"),
+    source: context.req.query("source"),
+    latestPerSource: latestPerSourceValue === undefined
+      ? undefined
+      : latestPerSourceValue === "true" ? true : latestPerSourceValue === "false" ? false : latestPerSourceValue,
+  });
+  if (!query.success) {
+    return context.json(
+      { error: "invalid_request", message: query.error.issues[0]?.message ?? "Invalid ranking snapshot filters" },
+      400,
+    );
+  }
+  return context.json({ snapshots: await getRankingSnapshots(database(context), limit, query.data) });
 });
 
 app.get("/api/rankings/sources", async (context) => {

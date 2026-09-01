@@ -15,6 +15,7 @@ export const researchJobInputSchema = z.object({
   position: positionSchema,
   season: z.string().regex(/^20\d{2}$/).optional(),
   week: z.number().int().min(1).max(25).optional(),
+  rankingLimit: z.number().int().min(1).max(500).optional(),
 }).strict();
 
 export const researchJobSchema = z.object({

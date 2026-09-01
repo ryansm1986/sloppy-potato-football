@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { DrizzleD1Database } from "drizzle-orm/d1";
 import { z } from "zod";
 import {
@@ -42,6 +42,8 @@ const entryInput = z.object({
   insight: z.string().trim().max(600).nullish(),
 });
 
+export const rankingPositionScope = z.enum(["ALL", "QB", "RB", "WR", "TE", "K", "DST"]);
+
 export const rankingSnapshotInput = z.object({
   source: sourceInput,
   externalRunId: z.string().trim().min(1).max(120).optional(),
@@ -50,6 +52,7 @@ export const rankingSnapshotInput = z.object({
   rankingType: z.enum(["redraft", "weekly", "rest_of_season", "dynasty", "rookie"]),
   season: z.string().regex(/^20\d{2}$/),
   week: z.number().int().min(1).max(25).nullish(),
+  positionScope: rankingPositionScope.optional().default("ALL"),
   generatedAt: z.string().datetime({ offset: true }),
   summary: z.string().trim().max(1_500).nullish(),
   methodology: z.string().trim().max(2_000).nullish(),
@@ -136,8 +139,8 @@ export async function createRankingSnapshot(db: Database, input: RankingSnapshot
     db.$client.prepare(
       `INSERT INTO ranking_snapshots (
          id, source_id, external_run_id, title, scoring_format, ranking_type, season,
-         week, status, generated_at, summary, methodology, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?)`,
+         week, position_scope, status, generated_at, summary, methodology, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?)`,
     ).bind(
       snapshotId,
       sourceId,
@@ -147,6 +150,7 @@ export async function createRankingSnapshot(db: Database, input: RankingSnapshot
       input.rankingType,
       input.season,
       input.week ?? null,
+      input.positionScope,
       new Date(input.generatedAt).getTime(),
       input.summary ?? null,
       input.methodology ?? null,
@@ -169,8 +173,58 @@ export async function createRankingSnapshot(db: Database, input: RankingSnapshot
   return { id: snapshotId, created: true };
 }
 
-export async function getRankingSnapshots(db: Database, limit: number) {
-  const snapshotRows = await db
+export const rankingSnapshotQueryInput = z.object({
+  scoringFormat: z.enum(["ppr", "half_ppr", "standard"]).optional(),
+  rankingType: z.enum(["redraft", "weekly", "rest_of_season", "dynasty", "rookie"]).optional(),
+  season: z.string().regex(/^20\d{2}$/).optional(),
+  week: z.number().int().min(1).max(25).nullable().optional(),
+  position: rankingPositionScope.optional(),
+  source: z.string().trim().min(1).max(128).optional(),
+  latestPerSource: z.boolean().optional().default(false),
+});
+
+export type RankingSnapshotQuery = z.input<typeof rankingSnapshotQueryInput>;
+
+export async function getRankingSnapshots(db: Database, limit: number, query: RankingSnapshotQuery = {}) {
+  const parsedQuery = rankingSnapshotQueryInput.parse(query);
+  const clauses = ["sn.status = 'completed'"];
+  const bindings: unknown[] = [];
+  const addFilter = (column: string, value: unknown) => {
+    clauses.push(`${column} = ?`);
+    bindings.push(value);
+  };
+  if (parsedQuery.scoringFormat) addFilter("sn.scoring_format", parsedQuery.scoringFormat);
+  if (parsedQuery.rankingType) addFilter("sn.ranking_type", parsedQuery.rankingType);
+  if (parsedQuery.season) addFilter("sn.season", parsedQuery.season);
+  if (parsedQuery.week !== undefined) {
+    if (parsedQuery.week === null) clauses.push("sn.week IS NULL");
+    else addFilter("sn.week", parsedQuery.week);
+  }
+  if (parsedQuery.position) addFilter("sn.position_scope", parsedQuery.position);
+  if (parsedQuery.source) {
+    clauses.push("(rs.canonical_key = ? OR rs.slug = ? OR rs.id = ?)");
+    bindings.push(parsedQuery.source, parsedQuery.source, parsedQuery.source);
+  }
+
+  const rankProjection = parsedQuery.latestPerSource
+    ? "ROW_NUMBER() OVER (PARTITION BY sn.source_id ORDER BY sn.generated_at DESC, sn.id DESC) AS source_rank"
+    : "1 AS source_rank";
+  const selectedSnapshotIds = await db.$client.prepare(
+    `WITH scoped AS (
+       SELECT sn.id, sn.generated_at, ${rankProjection}
+       FROM ranking_snapshots sn
+       INNER JOIN ranking_sources rs ON rs.id = sn.source_id
+       WHERE ${clauses.join(" AND ")}
+     )
+     SELECT id FROM scoped
+     WHERE source_rank = 1
+     ORDER BY generated_at DESC, id DESC
+     LIMIT ?`,
+  ).bind(...bindings, limit).all<{ id: string }>();
+  const snapshotIds = selectedSnapshotIds.results.map((row) => row.id);
+  if (snapshotIds.length === 0) return [];
+
+  const unorderedSnapshotRows = await db
     .select({
       id: rankingSnapshots.id,
       sourceId: rankingSnapshots.sourceId,
@@ -179,22 +233,25 @@ export async function getRankingSnapshots(db: Database, limit: number) {
       sourceCanonicalKey: rankingSources.canonicalKey,
       sourceKind: rankingSources.kind,
       sourceProvider: rankingSources.provider,
+      sourceAttributionUrl: rankingSources.attributionUrl,
       title: rankingSnapshots.title,
       scoringFormat: rankingSnapshots.scoringFormat,
       rankingType: rankingSnapshots.rankingType,
       season: rankingSnapshots.season,
       week: rankingSnapshots.week,
+      positionScope: rankingSnapshots.positionScope,
       generatedAt: rankingSnapshots.generatedAt,
       summary: rankingSnapshots.summary,
       methodology: rankingSnapshots.methodology,
     })
     .from(rankingSnapshots)
     .innerJoin(rankingSources, eq(rankingSources.id, rankingSnapshots.sourceId))
-    .where(eq(rankingSnapshots.status, "completed"))
-    .orderBy(desc(rankingSnapshots.generatedAt), desc(rankingSnapshots.id))
-    .limit(limit);
-
-  if (snapshotRows.length === 0) return [];
+    .where(inArray(rankingSnapshots.id, snapshotIds));
+  const snapshotsById = new Map(unorderedSnapshotRows.map((snapshot) => [snapshot.id, snapshot]));
+  const snapshotRows = snapshotIds.flatMap((id) => {
+    const snapshot = snapshotsById.get(id);
+    return snapshot ? [snapshot] : [];
+  });
   const entries = await db
     .select()
     .from(rankingSnapshotEntries)
@@ -216,12 +273,14 @@ export async function getRankingSnapshots(db: Database, limit: number) {
       slug: snapshot.sourceSlug,
       kind: snapshot.sourceKind,
       provider: snapshot.sourceProvider,
+      attributionUrl: snapshot.sourceAttributionUrl,
     },
     title: snapshot.title,
     scoringFormat: snapshot.scoringFormat,
     rankingType: snapshot.rankingType,
     season: snapshot.season,
     week: snapshot.week,
+    positionScope: snapshot.positionScope,
     generatedAt: snapshot.generatedAt,
     summary: snapshot.summary,
     methodology: snapshot.methodology,

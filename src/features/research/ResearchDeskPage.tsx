@@ -117,15 +117,17 @@ function SnapshotResult({ snapshot }: { snapshot: AgentRankingSnapshot }) {
 export default function ResearchDeskPage({ localDevelopmentOverride }: { localDevelopmentOverride?: boolean } = {}) {
   const [searchParams] = useSearchParams();
   const favoriteSource = searchParams.get("sourceName") ?? "";
+  const requestedPlayer = searchParams.get("subject") ?? "";
   const localDevelopment = localDevelopmentOverride ?? isLocalDevelopment();
   const [ownerToken, setOwnerToken] = useState(loadToken);
   const [tokenDraft, setTokenDraft] = useState(loadToken);
   const [accessState, setAccessState] = useState<BridgeAccessState>(() => localDevelopment || Boolean(ownerToken) ? "checking" : "locked");
   const [tokenRevision, setTokenRevision] = useState(0);
   const [jobType, setJobType] = useState<ResearchJobType>(favoriteSource ? "source_refresh" : "player_research");
-  const [subject, setSubject] = useState("");
+  const [subject, setSubject] = useState(requestedPlayer);
   const [source, setSource] = useState(favoriteSource);
   const [position, setPosition] = useState<"ALL" | "QB" | "RB" | "WR" | "TE">("ALL");
+  const [rankingLimit, setRankingLimit] = useState(100);
   const [jobs, setJobs] = useState<ResearchJob[]>([]);
   const [runner, setRunner] = useState<RunnerStatus | null>(null);
   const [snapshots, setSnapshots] = useState<AgentRankingSnapshot[]>([]);
@@ -140,10 +142,11 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
 
   const canSubmit = useMemo(() => {
     if (!authorized || isSubmitting) return false;
-    if (jobType === "source_refresh") return Boolean(source.trim());
+    const validRankingLimit = Number.isInteger(rankingLimit) && rankingLimit >= 1 && rankingLimit <= 500;
+    if (jobType === "source_refresh") return Boolean(source.trim()) && validRankingLimit;
     if (jobType === "player_research") return Boolean(subject.trim());
-    return true;
-  }, [authorized, isSubmitting, jobType, source, subject]);
+    return validRankingLimit;
+  }, [authorized, isSubmitting, jobType, rankingLimit, source, subject]);
 
   const refreshBridge = useCallback(async (signal?: AbortSignal) => {
     if (!canAttemptAccess) return;
@@ -227,6 +230,7 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
         ...(jobType === "player_research" ? { subject: subject.trim() } : {}),
         ...(jobType === "source_refresh" ? { sourceName: source.trim() } : {}),
         ...(jobType === "rankings_research" ? { position } : {}),
+        ...(jobType !== "player_research" ? { rankingLimit } : {}),
       });
       setJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]);
       if (jobType === "player_research") setSubject("");
@@ -309,6 +313,21 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
                   <small>Creates a sourced PPR redraft ranking snapshot for the selected scope.</small>
                 </label>
               )}
+              {jobType !== "player_research" && (
+                <label className="research-field research-field--compact">
+                  <span>Number of players</span>
+                  <input
+                    aria-label="Number of players"
+                    type="number"
+                    min={1}
+                    max={500}
+                    step={1}
+                    value={rankingLimit}
+                    onChange={(event) => setRankingLimit(Number(event.target.value))}
+                  />
+                  <small>Request a Top N list from 1–500. Larger lists take longer and depend on how much of the named source is publicly verifiable.</small>
+                </label>
+              )}
 
               <div className="research-guardrails">
                 <span><ShieldCheck size={14} /> PPR · redraft · fixed runner template</span>
@@ -343,7 +362,7 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
                 <JobStatusIcon status={job.status} />
                 <div>
                   <strong>{job.sourceName || job.subject || `${job.position ?? "ALL"} PPR rankings`}</strong>
-                  <span>{JOB_TYPE_LABELS[job.type]} · {JOB_STATUS_LABELS[job.status]} · {formatRelativeDate(job.updatedAt || job.createdAt)}</span>
+                  <span>{JOB_TYPE_LABELS[job.type]}{job.rankingLimit ? ` · Top ${job.rankingLimit}` : ""} · {JOB_STATUS_LABELS[job.status]} · {formatRelativeDate(job.updatedAt || job.createdAt)}</span>
                   {job.error && <small>{job.error}</small>}
                 </div>
                 {job.status === "failed" && <button type="button" onClick={() => void retry(job.id)} disabled={retryingId === job.id} aria-label={`Retry ${job.sourceName || job.subject || "research job"}`}><RefreshCw className={retryingId === job.id ? "spin" : ""} size={13} /></button>}

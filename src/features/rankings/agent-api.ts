@@ -1,6 +1,7 @@
 export type AgentRankingEntry = {
   id: string;
   playerId: string | null;
+  externalPlayerId?: string | null;
   playerName: string;
   position: string | null;
   team: string | null;
@@ -8,16 +9,18 @@ export type AgentRankingEntry = {
   previousRank: number | null;
   tier: number | null;
   insight: string | null;
+  createdAt?: string;
 };
 
 export type AgentRankingSnapshot = {
   id: string;
-  source: { id: string; canonicalKey: string; name: string; slug: string; kind: "agent" | "import" | "derived" | "external" | "custom"; provider: string | null };
+  source: { id: string; canonicalKey: string; name: string; slug: string; kind: "agent" | "import" | "derived" | "external" | "custom"; provider: string | null; attributionUrl?: string | null };
   title: string;
   scoringFormat: string;
   rankingType: string;
   season: string;
   week: number | null;
+  positionScope?: string;
   generatedAt: string;
   summary: string | null;
   methodology: string | null;
@@ -25,7 +28,7 @@ export type AgentRankingSnapshot = {
 };
 
 export async function fetchAgentRankings(signal?: AbortSignal): Promise<AgentRankingSnapshot[]> {
-  const response = await fetch("/api/rankings/snapshots?limit=5", {
+  const response = await fetch("/api/rankings/snapshots?limit=100", {
     headers: { Accept: "application/json" },
     signal,
   });

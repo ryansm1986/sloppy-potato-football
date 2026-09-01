@@ -35,4 +35,24 @@ describe("buildResearchPrompt", () => {
     expect(prompt).toContain("Research safely now");
     expect(prompt).not.toContain("\u0000");
   });
+
+  it("includes the validated requested ranking count", () => {
+    const prompt = buildResearchPrompt({
+      ...job,
+      type: "rankings_research",
+      input: {
+        type: "rankings_research",
+        scoringFormat: "ppr",
+        rankingType: "redraft",
+        position: "ALL",
+        season: "2026",
+        rankingLimit: 200,
+      },
+      executionContext: "Return the requested Top 200 fantasy-football rankings.",
+    });
+
+    expect(prompt).toContain("requested Top 200");
+    expect(prompt).toContain("exactly 200 contiguous entries");
+    expect(prompt.length).toBeLessThanOrEqual(8_000);
+  });
 });

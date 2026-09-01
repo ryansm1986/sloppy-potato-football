@@ -81,6 +81,98 @@ describe("research runner bridge", () => {
     expect(missingSource.status).toBe(400);
   });
 
+  it("validates, exposes, and executes the requested ranking count", async () => {
+    const suffix = crypto.randomUUID();
+    const runnerId = `ranking-limit-${suffix}`;
+    await heartbeat(runnerId);
+
+    const create200 = await app.request(
+      "https://potato.example/api/research/jobs",
+      jsonRequest("POST", {
+        type: "rankings_research",
+        scoringFormat: "ppr",
+        rankingType: "redraft",
+        position: "ALL",
+        season: "2026",
+        rankingLimit: 200,
+      }, "owner-secret", { "Idempotency-Key": `ranking-200-${suffix}` }),
+      sharedBindings,
+    );
+    expect(create200.status).toBe(201);
+    const created200 = await create200.json<{ job: { id: string; rankingLimit: number } }>();
+    expect(created200.job.rankingLimit).toBe(200);
+
+    const claim = await app.request(
+      "https://potato.example/api/runners/jobs/claim",
+      jsonRequest("POST", { runnerId }, "runner-secret"),
+      sharedBindings,
+    );
+    expect(claim.status).toBe(200);
+    const claimed = (await claim.json<{ job: {
+      id: string; leaseToken: string; input: { rankingLimit: number }; executionContext: string;
+    } }>()).job;
+    expect(claimed.input.rankingLimit).toBe(200);
+    expect(claimed.executionContext).toContain("requested Top 200");
+    expect(claimed.executionContext).toContain("exactly 200 contiguous entries");
+
+    const close200 = await app.request(
+      `https://potato.example/api/runners/jobs/${created200.job.id}/fail`,
+      jsonRequest("POST", {
+        runnerId,
+        leaseToken: claimed.leaseToken,
+        error: { code: "test_complete", message: "Ranking-limit contract verified", retryable: false },
+      }, "runner-secret"),
+      sharedBindings,
+    );
+    expect(close200.status).toBe(200);
+
+    const create500 = await app.request(
+      "https://potato.example/api/research/jobs",
+      jsonRequest("POST", {
+        type: "source_refresh",
+        sourceName: "FantasyPros",
+        rankingLimit: 500,
+      }, "owner-secret", { "Idempotency-Key": `ranking-500-${suffix}` }),
+      sharedBindings,
+    );
+    expect(create500.status).toBe(201);
+    const created500 = await create500.json<{ job: { id: string; rankingLimit: number } }>();
+    expect(created500.job.rankingLimit).toBe(500);
+
+    const claim500 = await app.request(
+      "https://potato.example/api/runners/jobs/claim",
+      jsonRequest("POST", { runnerId }, "runner-secret"),
+      sharedBindings,
+    );
+    const claimed500 = (await claim500.json<{ job: {
+      leaseToken: string; input: { rankingLimit: number }; executionContext: string;
+    } }>()).job;
+    expect(claimed500.input.rankingLimit).toBe(500);
+    expect(claimed500.executionContext).toContain("requested Top 500");
+    expect(claimed500.executionContext).toContain("capped at 500");
+
+    const close500 = await app.request(
+      `https://potato.example/api/runners/jobs/${created500.job.id}/fail`,
+      jsonRequest("POST", {
+        runnerId,
+        leaseToken: claimed500.leaseToken,
+        error: { code: "test_complete", message: "Ranking-limit contract verified", retryable: false },
+      }, "runner-secret"),
+      sharedBindings,
+    );
+    expect(close500.status).toBe(200);
+
+    const create501 = await app.request(
+      "https://potato.example/api/research/jobs",
+      jsonRequest("POST", {
+        type: "rankings_research",
+        rankingLimit: 501,
+      }, "owner-secret", { "Idempotency-Key": `ranking-501-${suffix}` }),
+      sharedBindings,
+    );
+    expect(create501.status).toBe(400);
+  });
+
   it("leases a source refresh, normalizes its source, ingests its snapshot, and completes idempotently", async () => {
     const suffix = crypto.randomUUID();
     const runnerId = `runner-${suffix}`;
@@ -93,7 +185,7 @@ describe("research runner bridge", () => {
         sourceName: "FantasyPros",
         scoringFormat: "ppr",
         rankingType: "redraft",
-        position: "ALL",
+        position: "RB",
         season: "2026",
       }, "owner-secret", { "Idempotency-Key": `refresh-${suffix}` }),
       sharedBindings,
@@ -174,10 +266,10 @@ describe("research runner bridge", () => {
     expect(completed.rankingSnapshotId).toBeTruthy();
 
     const source = await env.DB.prepare(
-      `SELECT rs.canonical_key, rs.name, rs.kind, rs.attribution_url, sn.external_run_id
+      `SELECT rs.canonical_key, rs.name, rs.kind, rs.attribution_url, sn.external_run_id, sn.position_scope
        FROM ranking_sources rs JOIN ranking_snapshots sn ON sn.source_id = rs.id WHERE sn.id = ?`,
     ).bind(completed.rankingSnapshotId).first<{
-      canonical_key: string; name: string; kind: string; attribution_url: string; external_run_id: string;
+      canonical_key: string; name: string; kind: string; attribution_url: string; external_run_id: string; position_scope: string;
     }>();
     expect(source).toMatchObject({
       canonical_key: "external:fantasypros",
@@ -185,6 +277,7 @@ describe("research runner bridge", () => {
       kind: "external",
       attribution_url: "https://www.fantasypros.com/nfl/rankings/ppr-cheatsheets.php",
       external_run_id: `research-job:${created.job.id}`,
+      position_scope: "RB",
     });
 
     const retryCompletion = await app.request(

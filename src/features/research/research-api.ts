@@ -4,6 +4,24 @@ export type ResearchJobType = "source_refresh" | "player_research" | "rankings_r
 export type ResearchJobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type RunnerState = "online" | "busy" | "stale" | "offline";
 
+export type ResearchResult = {
+  summary: string;
+  generatedAt: string;
+  citations: Array<{
+    title: string;
+    url: string;
+    publisher: string | null;
+    publishedAt: string | null;
+    accessedAt: string | null;
+  }>;
+  insights: Array<{
+    subject: string;
+    finding: string;
+    confidence: "low" | "medium" | "high" | null;
+    citationUrls: string[];
+  }>;
+};
+
 export type ResearchJob = {
   id: string;
   type: ResearchJobType;
@@ -13,12 +31,14 @@ export type ResearchJob = {
   scoringFormat: string;
   rankingType: string;
   position: string | null;
+  rankingLimit?: number | null;
   createdAt: string;
   updatedAt: string;
   startedAt: string | null;
   completedAt: string | null;
   attempts: number;
   error: string | null;
+  result?: ResearchResult | null;
 };
 
 export type RunnerStatus = {
@@ -37,6 +57,7 @@ export type CreateResearchJob = {
   scoringFormat: "ppr";
   rankingType: "redraft";
   position?: "ALL" | "QB" | "RB" | "WR" | "TE";
+  rankingLimit?: number;
 };
 
 export class ResearchApiError extends Error {
@@ -65,8 +86,8 @@ async function parseError(response: Response): Promise<ResearchApiError> {
   return new ResearchApiError(message, response.status);
 }
 
-export async function fetchResearchJobs(token: string, signal?: AbortSignal): Promise<ResearchJob[]> {
-  const response = await fetch("/api/research/jobs?limit=20", {
+export async function fetchResearchJobs(token: string, signal?: AbortSignal, limit = 20): Promise<ResearchJob[]> {
+  const response = await fetch(`/api/research/jobs?limit=${Math.min(Math.max(Math.trunc(limit), 1), 100)}`, {
     headers: authHeaders(token),
     signal,
   });

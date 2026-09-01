@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import { drizzle } from "drizzle-orm/d1";
 import { describe, expect, it } from "vitest";
+import app from "../index";
 import * as schema from "../db/schema";
 import {
   createRankingSnapshot,
@@ -28,6 +29,7 @@ describe("agent ranking snapshots", () => {
   it("persists immutable snapshots and treats runner retries idempotently", async () => {
     const db = drizzle(env.DB, { schema });
     const input = rankingSnapshotInput.parse(snapshotInput);
+    expect(input.positionScope).toBe("ALL");
     const first = await createRankingSnapshot(db, input);
     const retry = await createRankingSnapshot(db, input);
     expect(first.created).toBe(true);
@@ -36,6 +38,8 @@ describe("agent ranking snapshots", () => {
     const snapshots = await getRankingSnapshots(db, 5);
     expect(snapshots).toHaveLength(1);
     expect(snapshots[0].source.name).toBe("Codex Rank Agent");
+    expect(snapshots[0].source.attributionUrl).toBeNull();
+    expect(snapshots[0].positionScope).toBe("ALL");
     expect(snapshots[0].entries.map((entry) => entry.playerName)).toEqual(["Bijan Robinson", "Ja'Marr Chase"]);
     expect(snapshots[0].entries[0].team).toBe("ATL");
   });
@@ -86,5 +90,98 @@ describe("agent ranking snapshots", () => {
     const source = catalog.sources.find((candidate) => candidate.canonicalKey === "agent:codex-rank-agent");
     expect(source?.aliases.map((alias) => alias.value)).toContain("codex-rank-agent-v2");
     expect(source?.snapshotCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it("returns exact-scope latest snapshots per source without older history", async () => {
+    const db = drizzle(env.DB, { schema });
+    const suffix = crypto.randomUUID().slice(0, 8);
+    const sourceA = {
+      canonicalKey: `external:alpha-${suffix}`,
+      slug: `alpha-${suffix}`,
+      name: `Alpha Expert ${suffix}`,
+      kind: "external" as const,
+      attributionUrl: "https://alpha.example/football-rankings",
+    };
+    const sourceB = {
+      canonicalKey: `external:beta-${suffix}`,
+      slug: `beta-${suffix}`,
+      name: `Beta Expert ${suffix}`,
+      kind: "external" as const,
+      attributionUrl: "https://beta.example/football-rankings",
+    };
+    const create = async (
+      source: typeof sourceA,
+      externalRunId: string,
+      generatedAt: string,
+      positionScope: "ALL" | "RB",
+      title: string,
+    ) => createRankingSnapshot(db, rankingSnapshotInput.parse({
+      ...snapshotInput,
+      source,
+      externalRunId,
+      generatedAt,
+      positionScope,
+      title,
+      season: "2099",
+    }));
+
+    const oldAlpha = await create(sourceA, `old-alpha-${suffix}`, "2026-08-20T12:00:00.000Z", "ALL", "Old Alpha board");
+    const latestAlpha = await create(sourceA, `latest-alpha-${suffix}`, "2026-08-30T12:00:00.000Z", "ALL", "Latest Alpha board");
+    const rbAlpha = await create(sourceA, `rb-alpha-${suffix}`, "2026-09-01T12:00:00.000Z", "RB", "Alpha running backs");
+    const latestBeta = await create(sourceB, `latest-beta-${suffix}`, "2026-08-29T12:00:00.000Z", "ALL", "Latest Beta board");
+
+    const latest = await getRankingSnapshots(db, 100, {
+      scoringFormat: "ppr",
+      rankingType: "redraft",
+      season: "2099",
+      week: null,
+      position: "ALL",
+      latestPerSource: true,
+    });
+    expect(latest.map((snapshot) => snapshot.id)).toEqual([latestAlpha.id, latestBeta.id]);
+    expect(latest.map((snapshot) => snapshot.id)).not.toContain(oldAlpha.id);
+    expect(latest.map((snapshot) => snapshot.id)).not.toContain(rbAlpha.id);
+    expect(latest[0]).toMatchObject({
+      positionScope: "ALL",
+      source: {
+        canonicalKey: sourceA.canonicalKey,
+        attributionUrl: sourceA.attributionUrl,
+      },
+    });
+
+    const alphaOnly = await getRankingSnapshots(db, 100, {
+      scoringFormat: "ppr",
+      rankingType: "redraft",
+      season: "2099",
+      week: null,
+      position: "ALL",
+      source: sourceA.canonicalKey,
+      latestPerSource: true,
+    });
+    expect(alphaOnly.map((snapshot) => snapshot.id)).toEqual([latestAlpha.id]);
+
+    const endpoint = await app.request(
+      `https://potato.example/api/rankings/snapshots?scoringFormat=ppr&rankingType=redraft&season=2099&week=null&position=ALL&source=${encodeURIComponent(sourceA.canonicalKey)}&latestPerSource=true&limit=100`,
+      undefined,
+      { DB: env.DB },
+    );
+    expect(endpoint.status).toBe(200);
+    const response = await endpoint.json<{ snapshots: Array<{ id: string; positionScope: string; source: { attributionUrl: string } }> }>();
+    expect(response.snapshots).toEqual([
+      expect.objectContaining({
+        id: latestAlpha.id,
+        positionScope: "ALL",
+        source: expect.objectContaining({ attributionUrl: sourceA.attributionUrl }),
+      }),
+    ]);
+  });
+
+  it("rejects invalid exact-scope snapshot filters", async () => {
+    const response = await app.request(
+      "https://potato.example/api/rankings/snapshots?position=FLEX&latestPerSource=sometimes",
+      undefined,
+      { DB: env.DB },
+    );
+    expect(response.status).toBe(400);
   });
 });

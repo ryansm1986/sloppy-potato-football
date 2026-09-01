@@ -21,6 +21,7 @@ export const createResearchJobInput = z.object({
   position: position.optional().default("ALL"),
   season: z.string().regex(/^20\d{2}$/).optional(),
   week: z.number().int().min(1).max(25).optional(),
+  rankingLimit: z.number().int().min(1).max(500).optional(),
 }).superRefine((value, context) => {
   if (value.type === "player_research" && !value.subject) {
     context.addIssue({ code: "custom", path: ["subject"], message: "Player research requires a subject" });
@@ -28,7 +29,10 @@ export const createResearchJobInput = z.object({
   if (value.type === "source_refresh" && !value.sourceName) {
     context.addIssue({ code: "custom", path: ["sourceName"], message: "Source refresh requires a source name" });
   }
-});
+}).transform((value) => ({
+  ...value,
+  rankingLimit: value.type === "player_research" ? undefined : value.rankingLimit ?? 100,
+}));
 
 export const runnerHeartbeatInput = z.object({
   runnerId: z.string().trim().min(3).max(100).regex(/^[A-Za-z0-9._:-]+$/),
@@ -151,6 +155,7 @@ function toPublicJob(row: ResearchJobRow) {
     position: input.position ?? "ALL",
     season: input.season ?? null,
     week: input.week ?? null,
+    rankingLimit: input.rankingLimit ?? null,
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
     startedAt: iso(row.started_at),
@@ -167,13 +172,14 @@ function toPublicJob(row: ResearchJobRow) {
 function executionContext(row: ResearchJobRow) {
   const input = parseJson<z.infer<typeof createResearchJobInput>>(row.task_input_json, {} as never);
   const scope = `${input.scoringFormat ?? "ppr"} ${input.rankingType ?? "redraft"}, ${input.position ?? "ALL"}, season ${input.season ?? new Date().getUTCFullYear()}`;
+  const rankingLimit = input.rankingLimit ?? 100;
   switch (row.job_type) {
     case "source_refresh":
-      return `Refresh the published fantasy-football rankings from the named source (${input.sourceName}) for ${scope}. Return only verifiable findings, citations, and a structured ranking snapshot when rankings are available.`;
+      return `Refresh the published fantasy-football rankings from the named source (${input.sourceName}) for ${scope}. Collect up to the requested Top ${rankingLimit} entries (all verifiable entries the source publishes, capped at ${rankingLimit}). Return only verifiable findings, citations, and a structured ranking snapshot when rankings are available.`;
     case "player_research":
       return `Research the named NFL fantasy player (${input.subject}) for ${scope}. Summarize current role, material news, risk, and ranking implications with citations.`;
     case "rankings_research":
-      return `Research a current fantasy-football ranking board for ${scope}${input.subject ? `, focused on ${input.subject}` : ""}. Cite reputable sources and return a structured, contiguous ranking snapshot.`;
+      return `Research a current fantasy-football ranking board for ${scope}${input.subject ? `, focused on ${input.subject}` : ""}. Return the requested Top ${rankingLimit}: exactly ${rankingLimit} contiguous entries when supported by verifiable evidence, or as many verifiable entries as are available up to ${rankingLimit}. Cite reputable sources and return a structured, contiguous ranking snapshot.`;
   }
 }
 
@@ -440,6 +446,7 @@ export async function completeResearchJob(db: Database, jobId: string, input: z.
       },
       generatedAt: input.result.generatedAt ?? new Date(now).toISOString(),
       externalRunId: `research-job:${jobId}`,
+      positionScope: taskInput.position ?? "ALL",
     });
     const created = await createRankingSnapshot(db, snapshot);
     rankingSnapshotId = created.id;

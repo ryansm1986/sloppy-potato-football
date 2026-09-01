@@ -19,13 +19,17 @@ import {
   ArrowDown,
   ArrowUp,
   Bot,
+  BarChart3,
   Check,
   ChevronDown,
+  ChevronRight,
   ChevronUp,
   Clock3,
   Columns2,
+  ExternalLink,
   GripVertical,
   List,
+  Newspaper,
   RefreshCw,
   RotateCcw,
   Search,
@@ -36,9 +40,20 @@ import {
   TrendingDown,
   TrendingUp,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { NavLink } from "react-router";
+import {
+  fetchResearchJobs,
+  RESEARCH_OWNER_TOKEN_KEY,
+  type ResearchJob,
+} from "../research/research-api";
 import { fetchAgentRankings, type AgentRankingSnapshot } from "./agent-api";
+import {
+  aggregateRankingSnapshots,
+  normalizePlayerName,
+  selectLatestSnapshotPerSource,
+  type AggregatedRankingEntry,
+} from "./ranking-aggregate";
 import {
   loadRankingsPreferences,
   saveRankingsPreferences,
@@ -134,12 +149,116 @@ function SortableRankingRow({
   );
 }
 
+type DisplayRankingEntry = AgentRankingSnapshot["entries"][number] | AggregatedRankingEntry;
+
+function isAggregateEntry(entry: DisplayRankingEntry): entry is AggregatedRankingEntry {
+  return "sourceRanks" in entry;
+}
+
+function AgentRankingRow({
+  entry,
+  snapshot,
+  researchJob,
+  hasOwnerToken,
+}: {
+  entry: DisplayRankingEntry;
+  snapshot: AgentRankingSnapshot;
+  researchJob?: ResearchJob;
+  hasOwnerToken: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const detailsId = useId();
+  const movement = entry.previousRank === null ? null : entry.previousRank - entry.rank;
+  const research = researchJob?.result;
+  const aggregateEntry = isAggregateEntry(entry) ? entry : null;
+
+  return (
+    <li className={`agent-ranking-row${expanded ? " is-expanded" : ""}`}>
+      <button
+        className="agent-ranking-row__toggle"
+        type="button"
+        aria-expanded={expanded}
+        aria-controls={detailsId}
+        onClick={() => setExpanded((current) => !current)}
+      >
+        <strong className="agent-ranking-number">{entry.rank}</strong>
+        <span className="position-orb">{entry.position ?? "?"}</span>
+        <span className="agent-ranking-player">
+          <strong>{entry.playerName}</strong>
+          <small>{entry.team ?? "FA"} · {aggregateEntry ? `Average ${aggregateEntry.averageRank.toFixed(1)}` : snapshot.source.name}</small>
+        </span>
+        <span className="agent-ranking-context">
+          {aggregateEntry ? `${aggregateEntry.coverage}/${aggregateEntry.sourceCount} sources` : entry.tier ? `Tier ${entry.tier}` : "Details"}
+        </span>
+        {movement !== null && movement !== 0 ? (
+          <span className={`agent-ranking-movement ${movement > 0 ? "positive" : "negative"}`}>
+            {movement > 0 ? <TrendingUp size={13} /> : <TrendingDown size={13} />}
+            {movement > 0 ? `+${movement}` : movement}
+          </span>
+        ) : <span className="agent-ranking-movement is-muted">{entry.previousRank ? "Even" : "New"}</span>}
+        <ChevronRight className="agent-ranking-chevron" size={16} />
+      </button>
+
+      {expanded && (
+        <div className="agent-player-details" id={detailsId} role="region" aria-label={`${entry.playerName} details`}>
+          <section>
+            <header><Sparkles size={14} /><strong>Ranking insight</strong></header>
+            {entry.insight ? <p>{entry.insight}</p> : aggregateEntry ? (
+              <div className="expert-rank-grid">
+                {aggregateEntry.sourceRanks.map((sourceRank) => (
+                  <div key={`${sourceRank.snapshotId}:${sourceRank.sourceId}`}>
+                    {sourceRank.attributionUrl
+                      ? <a href={sourceRank.attributionUrl} target="_blank" rel="noreferrer">{sourceRank.sourceName}<ExternalLink size={10} /></a>
+                      : <span>{sourceRank.sourceName}</span>}
+                    <strong>#{sourceRank.rank}</strong>
+                    {sourceRank.insight && <p>{sourceRank.insight}</p>}
+                  </div>
+                ))}
+              </div>
+            ) : <p>No player-specific note was included in this snapshot.</p>}
+            <small>{snapshot.methodology ?? "Rankings are preserved exactly as returned by this source."}</small>
+          </section>
+
+          <section>
+            <header><Newspaper size={14} /><strong>Latest player research</strong></header>
+            {research ? (
+              <>
+                <p>{research.summary}</p>
+                {research.insights.slice(0, 2).map((insight) => <p className="player-finding" key={`${insight.subject}:${insight.finding}`}>{insight.finding}</p>)}
+                <div className="player-detail-links">
+                  {research.citations.slice(0, 3).map((citation) => (
+                    <a href={citation.url} key={citation.url} target="_blank" rel="noreferrer">{citation.publisher ?? citation.title}<ExternalLink size={11} /></a>
+                  ))}
+                </div>
+                <small>Researched {relativeTime(research.generatedAt)}</small>
+              </>
+            ) : (
+              <p>{hasOwnerToken ? "No completed player research is saved yet." : "Save the owner token to load private player research."}</p>
+            )}
+            <NavLink className="player-research-link" to={`/research?subject=${encodeURIComponent(entry.playerName)}`}>
+              <Bot size={12} /> Research latest news
+            </NavLink>
+          </section>
+
+          <section>
+            <header><BarChart3 size={14} /><strong>Weekly & season stats</strong></header>
+            <p>Historical box scores are ready for the next data connection. Yahoo league sync or the planned nflverse feed will populate weekly game logs and season totals here.</p>
+            <small>No demonstration statistics are shown as live data.</small>
+          </section>
+        </div>
+      )}
+    </li>
+  );
+}
+
 function AgentSnapshotPanel({
   snapshots,
   loading,
   error,
   collapsed,
   favoriteSourceKeys,
+  researchByPlayer,
+  hasOwnerToken,
   onCollapsedChange,
   onRefresh,
   onToggleFavorite,
@@ -150,20 +269,44 @@ function AgentSnapshotPanel({
   error: string | null;
   collapsed: boolean;
   favoriteSourceKeys: string[];
+  researchByPlayer: Map<string, ResearchJob>;
+  hasOwnerToken: boolean;
   onCollapsedChange: (collapsed: boolean) => void;
   onRefresh: () => void;
   onToggleFavorite: (sourceSlug: string) => void;
   onApply: (snapshot: AgentRankingSnapshot, position: string) => void;
 }) {
+  const [selectedSourceKey, setSelectedSourceKey] = useState("aggregate");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [copyScope, setCopyScope] = useState("ALL");
-  const selected = snapshots.find((snapshot) => snapshot.id === selectedId)
-    ?? snapshots.find((snapshot) => favoriteSourceKeys.includes(snapshot.source.canonicalKey))
-    ?? snapshots[0];
+  const latestBySource = useMemo(() => selectLatestSnapshotPerSource(snapshots), [snapshots]);
+  const aggregate = useMemo(() => aggregateRankingSnapshots(snapshots), [snapshots]);
+  const selectedSource = latestBySource.find((snapshot) => snapshot.source.canonicalKey === selectedSourceKey);
+  const sourceHistory = selectedSourceKey === "aggregate"
+    ? []
+    : snapshots.filter((snapshot) => snapshot.source.canonicalKey === selectedSourceKey);
+  const selected = selectedSourceKey === "aggregate"
+    ? aggregate?.snapshot
+    : snapshots.find((snapshot) => snapshot.id === selectedId && snapshot.source.canonicalKey === selectedSourceKey) ?? selectedSource;
+  const displayEntries: DisplayRankingEntry[] = selectedSourceKey === "aggregate"
+    ? aggregate?.entries ?? []
+    : selected?.entries ?? [];
 
   useEffect(() => {
     setSelectedId(null);
   }, [snapshots[0]?.id]);
+
+  useEffect(() => {
+    if (selectedSourceKey !== "aggregate" && !latestBySource.some((snapshot) => snapshot.source.canonicalKey === selectedSourceKey)) {
+      setSelectedSourceKey("aggregate");
+      setSelectedId(null);
+    }
+  }, [latestBySource, selectedSourceKey]);
+
+  function selectSource(snapshot: AgentRankingSnapshot) {
+    setSelectedSourceKey(snapshot.source.canonicalKey);
+    setSelectedId(snapshot.id);
+  }
 
   return (
     <aside className={`agent-rankings panel${collapsed ? " is-collapsed" : ""}`} aria-label="Agent ranking updates">
@@ -171,7 +314,7 @@ function AgentSnapshotPanel({
         <div className="research-callout__icon"><Bot size={19} /></div>
         <div>
           <p className="eyebrow">Agent workspace · Read only</p>
-          <h2>Latest Snapshot</h2>
+          <h2>Ranking Sources</h2>
         </div>
         <div className="agent-header-actions">
           {selected && <span className="status-pill status-pill--snapshot"><Clock3 size={11} /> Snapshot</span>}
@@ -215,14 +358,24 @@ function AgentSnapshotPanel({
       {selected && (
         <>
           <div className="agent-source-strip" aria-label="Ranking sources">
-            {[...new Map(snapshots.map((snapshot) => [snapshot.source.canonicalKey, snapshot])).values()]
+            {aggregate && (
+              <button
+                className={`aggregate-source-chip${selectedSourceKey === "aggregate" ? " is-active" : ""}`}
+                type="button"
+                aria-pressed={selectedSourceKey === "aggregate"}
+                onClick={() => { setSelectedSourceKey("aggregate"); setSelectedId(null); }}
+              >
+                <Sparkles size={12} /> Aggregate
+              </button>
+            )}
+            {[...latestBySource]
               .sort((left, right) => Number(favoriteSourceKeys.includes(right.source.canonicalKey)) - Number(favoriteSourceKeys.includes(left.source.canonicalKey)))
               .map((snapshot) => {
                 const favorite = favoriteSourceKeys.includes(snapshot.source.canonicalKey);
-                const active = snapshot.source.canonicalKey === selected.source.canonicalKey;
+                const active = snapshot.source.canonicalKey === selectedSourceKey;
                 return (
                   <div className={`source-chip${active ? " is-active" : ""}`} key={snapshot.source.canonicalKey}>
-                    <button type="button" onClick={() => setSelectedId(snapshot.id)}>{snapshot.source.name}</button>
+                    <button type="button" aria-pressed={active} onClick={() => selectSource(snapshot)}>{snapshot.source.name}</button>
                     <button
                       className={favorite ? "is-favorite" : ""}
                       type="button"
@@ -239,8 +392,9 @@ function AgentSnapshotPanel({
           <div className="snapshot-meta">
             <div>
               <strong>{selected.title}</strong>
-              <span>{selected.source.name} · {(selected.source.kind ?? "agent").toUpperCase()} {selected.source.provider ? `via ${selected.source.provider}` : ""}</span>
-              <code title="Stable source key">Source key · {selected.source.canonicalKey}</code>
+              <span>{selectedSourceKey === "aggregate" ? `${aggregate?.sourceSnapshots.length ?? 0} latest compatible source${aggregate?.sourceSnapshots.length === 1 ? "" : "s"}` : `${selected.source.name} · ${(selected.source.kind ?? "agent").toUpperCase()} ${selected.source.provider ? `via ${selected.source.provider}` : ""}`}</span>
+              <code title="Stable source key">{selectedSourceKey === "aggregate" ? "Unweighted arithmetic mean" : `Source key · ${selected.source.canonicalKey}`}</code>
+              {selectedSourceKey !== "aggregate" && selected.source.attributionUrl && <a className="snapshot-source-link" href={selected.source.attributionUrl} target="_blank" rel="noreferrer">View original source <ExternalLink size={10} /></a>}
             </div>
             <div className="snapshot-scope">
               <span><Clock3 size={13} /> {relativeTime(selected.generatedAt)}</span>
@@ -248,27 +402,18 @@ function AgentSnapshotPanel({
             </div>
           </div>
           {selected.summary && <p className="snapshot-summary">{selected.summary}</p>}
-          <div className="agent-moves">
-            {selected.entries.slice(0, 8).map((entry) => {
-              const movement = entry.previousRank === null ? null : entry.previousRank - entry.rank;
-              return (
-                <article key={entry.id}>
-                  <span className="position-orb">{entry.position ?? "?"}</span>
-                  <div>
-                    <strong>{entry.playerName}</strong>
-                    <span>{entry.team ?? "FA"} · Agent #{entry.rank}</span>
-                  </div>
-                  {movement !== null && movement !== 0 ? (
-                    <b className={movement > 0 ? "positive" : "negative"}>
-                      {movement > 0 ? <TrendingUp size={13} /> : <TrendingDown size={13} />}
-                      {movement > 0 ? `+${movement}` : movement}
-                    </b>
-                  ) : <b className="muted-rank">NEW</b>}
-                  {entry.insight && <p>{entry.insight}</p>}
-                </article>
-              );
-            })}
-          </div>
+          <div className="agent-ranking-list-heading" aria-hidden="true"><span>Rank</span><span>Player</span><span>Source context</span><span>Move</span></div>
+          <ol className="agent-ranking-list">
+            {displayEntries.map((entry) => (
+              <AgentRankingRow
+                entry={entry}
+                hasOwnerToken={hasOwnerToken}
+                key={entry.id}
+                researchJob={researchByPlayer.get(normalizePlayerName(entry.playerName))}
+                snapshot={selected}
+              />
+            ))}
+          </ol>
           <div className="agent-copy-controls">
             <label>
               Copy
@@ -282,18 +427,18 @@ function AgentSnapshotPanel({
             <button className="button button--primary agent-rankings__apply" type="button" onClick={() => onApply(selected, copyScope)}>
               Copy into My Rankings
             </button>
-            <NavLink
+            {selectedSourceKey !== "aggregate" && <NavLink
               className="button button--secondary agent-rankings__refresh"
               to={`/research?source=${encodeURIComponent(selected.source.slug)}&sourceName=${encodeURIComponent(selected.source.name)}`}
             >
               <RefreshCw size={13} /> Research an update
-            </NavLink>
+            </NavLink>}
           </div>
-          {snapshots.length > 1 && (
+          {sourceHistory.length > 1 && (
             <label className="snapshot-select">
-              Snapshot
+              Source history
               <select value={selected.id} onChange={(event) => setSelectedId(event.target.value)}>
-                {snapshots.map((snapshot) => <option key={snapshot.id} value={snapshot.id}>{snapshot.title}</option>)}
+                {sourceHistory.map((snapshot) => <option key={snapshot.id} value={snapshot.id}>{snapshot.title}</option>)}
               </select>
             </label>
           )}
@@ -313,6 +458,8 @@ export default function RankingsPage() {
   const [snapshots, setSnapshots] = useState<AgentRankingSnapshot[]>([]);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [snapshotsLoading, setSnapshotsLoading] = useState(true);
+  const [researchJobs, setResearchJobs] = useState<ResearchJob[]>([]);
+  const ownerToken = typeof window === "undefined" ? "" : window.localStorage.getItem(RESEARCH_OWNER_TOKEN_KEY)?.trim() ?? "";
   const [pendingCopy, setPendingCopy] = useState<{ snapshot: AgentRankingSnapshot; position: string } | null>(null);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
   const [preferences, setPreferences] = useState<RankingsPreferences>(() =>
@@ -343,6 +490,25 @@ export default function RankingsPage() {
     void loadAgentSnapshots(controller.signal);
     return () => controller.abort();
   }, []);
+
+  useEffect(() => {
+    if (!ownerToken) return;
+    const controller = new AbortController();
+    void fetchResearchJobs(ownerToken, controller.signal, 100)
+      .then(setResearchJobs)
+      .catch(() => setResearchJobs([]));
+    return () => controller.abort();
+  }, [ownerToken]);
+
+  const researchByPlayer = useMemo(() => {
+    const byPlayer = new Map<string, ResearchJob>();
+    for (const job of researchJobs) {
+      if (job.type !== "player_research" || job.status !== "completed" || !job.subject || !job.result) continue;
+      const key = normalizePlayerName(job.subject);
+      if (!byPlayer.has(key)) byPlayer.set(key, job);
+    }
+    return byPlayer;
+  }, [researchJobs]);
 
   async function loadAgentSnapshots(signal?: AbortSignal) {
     setSnapshotsLoading(true);
@@ -486,6 +652,8 @@ export default function RankingsPage() {
         error={snapshotError}
         collapsed={preferences.agentCollapsed}
         favoriteSourceKeys={preferences.favoriteSourceKeys}
+        researchByPlayer={researchByPlayer}
+        hasOwnerToken={Boolean(ownerToken)}
         onCollapsedChange={(agentCollapsed) => updatePreferences({ agentCollapsed })}
         onRefresh={() => { void loadAgentSnapshots(); }}
         onToggleFavorite={toggleSource}

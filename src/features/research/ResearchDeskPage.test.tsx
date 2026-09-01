@@ -63,6 +63,13 @@ describe("ResearchDeskPage", () => {
     expect(fetchMock).not.toHaveBeenCalledWith("/api/research/runner/status", expect.anything());
   });
 
+  it("prefills player research from a ranking-row link", () => {
+    vi.stubGlobal("fetch", mockBridge());
+    render(<MemoryRouter initialEntries={["/research?subject=Malik%20Nabers"]}><ResearchDeskPage localDevelopmentOverride={false} /></MemoryRouter>);
+
+    expect(screen.getByLabelText("Player name")).toHaveValue("Malik Nabers");
+  });
+
   it("saves an owner token locally and begins verification", () => {
     vi.stubGlobal("fetch", mockBridge());
     render(<MemoryRouter><ResearchDeskPage localDevelopmentOverride={false} /></MemoryRouter>);
@@ -152,6 +159,30 @@ describe("ResearchDeskPage", () => {
       rankingType: "redraft",
     });
     expect(String(init.body)).not.toContain("prompt");
+  });
+
+  it("sends a configurable ranking count up to 500", async () => {
+    window.localStorage.setItem(RESEARCH_OWNER_TOKEN_KEY, "owner-secret");
+    const fetchMock = mockBridge();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<MemoryRouter><ResearchDeskPage localDevelopmentOverride={false} /></MemoryRouter>);
+
+    fireEvent.click(screen.getByLabelText("Rankings research"));
+    const limit = screen.getByLabelText("Number of players");
+    expect(limit).toHaveValue(100);
+    fireEvent.change(limit, { target: { value: "500" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: /queue research/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: /queue research/i }));
+
+    const createCall = fetchMock.mock.calls.find(([url, init]) => url === "/api/research/jobs" && init?.method === "POST");
+    expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
+      type: "rankings_research",
+      position: "ALL",
+      rankingLimit: 500,
+    });
+
+    fireEvent.change(limit, { target: { value: "501" } });
+    expect(screen.getByRole("button", { name: /queue research/i })).toBeDisabled();
   });
 
   it("shows runner state and retries a failed cloud job", async () => {
