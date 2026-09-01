@@ -129,6 +129,11 @@ describe("agent ranking snapshots", () => {
     const latestAlpha = await create(sourceA, `latest-alpha-${suffix}`, "2026-08-30T12:00:00.000Z", "ALL", "Latest Alpha board");
     const rbAlpha = await create(sourceA, `rb-alpha-${suffix}`, "2026-09-01T12:00:00.000Z", "RB", "Alpha running backs");
     const latestBeta = await create(sourceB, `latest-beta-${suffix}`, "2026-08-29T12:00:00.000Z", "ALL", "Latest Beta board");
+    // A publisher may report an old or timezone-shifted generatedAt. The most
+    // recently saved matching board must still win latest-per-source selection.
+    const savedLaterAlpha = await create(sourceA, `saved-later-alpha-${suffix}`, "2026-08-01T05:00:00.000Z", "ALL", "Saved later Alpha board");
+    await env.DB.prepare("UPDATE ranking_snapshots SET created_at = ? WHERE id = ?")
+      .bind(Date.UTC(2100, 0, 1), savedLaterAlpha.id).run();
 
     const latest = await getRankingSnapshots(db, 100, {
       scoringFormat: "ppr",
@@ -138,11 +143,14 @@ describe("agent ranking snapshots", () => {
       position: "ALL",
       latestPerSource: true,
     });
-    expect(latest.map((snapshot) => snapshot.id)).toEqual([latestAlpha.id, latestBeta.id]);
+    expect(latest.map((snapshot) => snapshot.id)).toEqual([savedLaterAlpha.id, latestBeta.id]);
     expect(latest.map((snapshot) => snapshot.id)).not.toContain(oldAlpha.id);
+    expect(latest.map((snapshot) => snapshot.id)).not.toContain(latestAlpha.id);
     expect(latest.map((snapshot) => snapshot.id)).not.toContain(rbAlpha.id);
     expect(latest[0]).toMatchObject({
       positionScope: "ALL",
+      generatedAt: new Date("2026-08-01T05:00:00.000Z"),
+      savedAt: new Date(Date.UTC(2100, 0, 1)),
       source: {
         canonicalKey: sourceA.canonicalKey,
         attributionUrl: sourceA.attributionUrl,
@@ -158,7 +166,7 @@ describe("agent ranking snapshots", () => {
       source: sourceA.canonicalKey,
       latestPerSource: true,
     });
-    expect(alphaOnly.map((snapshot) => snapshot.id)).toEqual([latestAlpha.id]);
+    expect(alphaOnly.map((snapshot) => snapshot.id)).toEqual([savedLaterAlpha.id]);
 
     const endpoint = await app.request(
       `https://potato.example/api/rankings/snapshots?scoringFormat=ppr&rankingType=redraft&season=2099&week=null&position=ALL&source=${encodeURIComponent(sourceA.canonicalKey)}&latestPerSource=true&limit=100`,
@@ -169,7 +177,7 @@ describe("agent ranking snapshots", () => {
     const response = await endpoint.json<{ snapshots: Array<{ id: string; positionScope: string; source: { attributionUrl: string } }> }>();
     expect(response.snapshots).toEqual([
       expect.objectContaining({
-        id: latestAlpha.id,
+        id: savedLaterAlpha.id,
         positionScope: "ALL",
         source: expect.objectContaining({ attributionUrl: sourceA.attributionUrl }),
       }),

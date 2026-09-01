@@ -47,4 +47,40 @@ describe("RunnerApiClient", () => {
     expect(job?.type).toBe("rankings_research");
     expect(fetchMock).toHaveBeenCalledOnce();
   });
+
+  it("forwards separately attributed ranking source boards", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response("{}", { status: 200 }));
+    const client = new RunnerApiClient(config, fetchMock);
+    const board = (sourceName: string, sourceUrl: string) => ({
+      sourceName,
+      sourceUrl,
+      title: `${sourceName} PPR rankings`,
+      scoringFormat: "ppr" as const,
+      rankingType: "redraft" as const,
+      season: "2026",
+      week: null,
+      summary: null,
+      methodology: null,
+      entries: [{
+        playerName: "Bijan Robinson", position: "RB", team: "ATL", rank: 1,
+        previousRank: null, tier: null, insight: null,
+      }],
+    });
+    await client.complete("job-123", "f1f2d93e-50c6-41a9-a108-6c9ed8d12845", {
+      summary: "Three published boards.",
+      generatedAt: "2026-09-01T22:00:00.000Z",
+      citations: [],
+      insights: [],
+      rankingSnapshot: null,
+      rankingSnapshots: [
+        board("FantasyPros", "https://www.fantasypros.com/nfl/rankings/ppr-cheatsheets.php"),
+        board("RotoWire", "https://www.rotowire.com/football/rankings.php"),
+        board("CBS Sports", "https://www.cbssports.com/fantasy/football/rankings/"),
+      ],
+    });
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
+      result: { rankingSnapshots: unknown[] };
+    };
+    expect(body.result.rankingSnapshots).toHaveLength(3);
+  });
 });

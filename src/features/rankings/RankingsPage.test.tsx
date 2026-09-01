@@ -33,6 +33,24 @@ const secondExpertSnapshot = {
   ],
 };
 
+const multiPositionSnapshot = {
+  ...agentSnapshot,
+  id: "snapshot-multi-position",
+  positionScope: "ALL",
+  title: "All-position PPR rankings",
+  entries: Array.from({ length: 12 }, (_, index) => ({
+    id: `multi-entry-${index + 1}`,
+    playerId: null,
+    playerName: `Test Player ${String(index + 1).padStart(2, "0")}`,
+    position: index < 6 ? "WR" : "QB",
+    team: index < 6 ? "NYG" : "CHI",
+    rank: index + 1,
+    previousRank: null,
+    tier: index < 6 ? 1 : 2,
+    insight: `Test insight ${index + 1}.`,
+  })),
+};
+
 describe("RankingsPage", () => {
   beforeEach(() => window.localStorage.clear());
   afterEach(() => {
@@ -93,6 +111,12 @@ describe("RankingsPage", () => {
     render(<MemoryRouter><RankingsPage /></MemoryRouter>);
 
     const agent = await screen.findByRole("region", { name: "Agent Rankings" });
+    const sourceSelect = within(agent).getByLabelText("Ranking source");
+    expect(within(sourceSelect).getByRole("option", { name: "Aggregate · 2 sources" })).toBeInTheDocument();
+    expect(within(sourceSelect).getByRole("option", { name: "Expert B" })).toBeInTheDocument();
+    fireEvent.change(sourceSelect, { target: { value: "external:expert-b" } });
+    expect(within(agent).getByText("Expert B PPR Rankings")).toBeInTheDocument();
+    fireEvent.change(sourceSelect, { target: { value: "aggregate" } });
     expect(within(agent).getByRole("button", { name: "Aggregate" })).toHaveAttribute("aria-pressed", "true");
     const aggregateChase = within(agent).getByRole("button", { name: /Ja'Marr Chase.*Average 1\.5/i });
     expect(within(aggregateChase).getByText("1")).toHaveClass("agent-ranking-number");
@@ -113,6 +137,30 @@ describe("RankingsPage", () => {
     expect(within(details).getByText("Latest player research")).toBeInTheDocument();
     expect(within(details).getByText("Weekly & season stats")).toBeInTheDocument();
     expect(within(details).getByRole("link", { name: /Research latest news/i })).toHaveAttribute("href", "/research?subject=Ja'Marr%20Chase");
+  });
+
+  it("filters the agent list by position and player name and changes the display count", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ snapshots: [multiPositionSnapshot] })));
+    render(<MemoryRouter><RankingsPage /></MemoryRouter>);
+
+    const agent = await screen.findByRole("region", { name: "Agent Rankings" });
+    const rankingsList = within(agent).getByRole("list", { name: "Displayed agent rankings" });
+    const positionSelect = within(agent).getByLabelText("Position");
+    const displaySelect = within(agent).getByLabelText("Show");
+
+    expect(positionSelect).toHaveValue("ALL");
+    expect(within(positionSelect).getByRole("option", { name: "QB" })).toBeInTheDocument();
+    expect(within(positionSelect).getByRole("option", { name: "WR" })).toBeInTheDocument();
+    fireEvent.change(displaySelect, { target: { value: "10" } });
+    expect(within(rankingsList).getAllByRole("listitem")).toHaveLength(10);
+    expect(within(agent).getByText((_, element) => element?.tagName === "P" && element.textContent === "Showing 10 of 12 matching players")).toBeInTheDocument();
+
+    fireEvent.change(positionSelect, { target: { value: "WR" } });
+    expect(within(rankingsList).getAllByRole("listitem")).toHaveLength(6);
+    fireEvent.change(within(agent).getByLabelText("Player name"), { target: { value: "Test Player 04" } });
+    expect(within(rankingsList).getAllByRole("listitem")).toHaveLength(1);
+    expect(within(rankingsList).getByText("Test Player 04")).toBeInTheDocument();
+    expect(within(rankingsList).queryByText("Test Player 03")).not.toBeInTheDocument();
   });
 
   it("shows saved cited player research inside an expanded ranking row", async () => {

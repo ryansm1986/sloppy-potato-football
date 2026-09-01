@@ -448,6 +448,11 @@ tbody tr:hover { background: rgba(255, 255, 255, .015); }
 .agent-header-actions > button:hover { color: var(--amber); }
 .agent-collapsed-summary { min-height: 52px; display: flex; align-items: center; gap: 8px; padding: 10px 14px; color: var(--subtle); font-size: 8px; }
 .agent-collapsed-summary span { padding: 5px 7px; border: 1px solid var(--border-soft); border-radius: 4px; background: #111215; }
+.agent-source-toolbar { display: grid; grid-template-columns: minmax(190px, 1fr) minmax(140px, auto); align-items: end; gap: 8px 14px; padding: 12px 13px; border-bottom: 1px solid var(--border-soft); background: #15161a; }
+.agent-source-toolbar label, .agent-list-controls label { min-width: 0; display: flex; flex-direction: column; gap: 6px; color: var(--subtle); font-size: 7px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.agent-source-toolbar select, .agent-list-controls select { width: 100%; height: 34px; padding: 0 30px 0 9px; color: var(--text); border: 1px solid var(--border); border-radius: 5px; background: #101114; font-size: 9px; }
+.agent-source-toolbar select:focus-visible, .agent-list-controls select:focus-visible, .agent-player-filter__input:focus-within { border-color: rgba(245, 158, 11, .65); outline: 2px solid rgba(245, 158, 11, .12); outline-offset: 0; }
+.agent-source-toolbar small { align-self: center; color: var(--subtle); font-size: 7px; line-height: 1.5; }
 .agent-source-strip { display: flex; gap: 6px; overflow-x: auto; padding: 10px 13px; border-bottom: 1px solid var(--border-soft); background: #111215; scrollbar-width: thin; }
 .source-chip { flex: 0 0 auto; display: flex; align-items: center; overflow: hidden; border: 1px solid var(--border); border-radius: 5px; background: #101114; }
 .source-chip.is-active { border-color: rgba(245, 158, 11, .45); background: var(--amber-soft); }
@@ -464,8 +469,17 @@ tbody tr:hover { background: rgba(255, 255, 255, .015); }
 .snapshot-source-link { width: fit-content; display: inline-flex; align-items: center; gap: 4px; color: var(--amber); font-size: 7px; font-weight: 800; text-decoration: none; }
 .snapshot-meta .snapshot-scope { align-items: flex-end; text-align: right; }
 .snapshot-summary { margin: 0 14px 12px; color: var(--muted); font-size: 8px; line-height: 1.55; }
+.agent-list-controls { display: grid; grid-template-columns: minmax(110px, .65fr) minmax(180px, 1.5fr) minmax(110px, .65fr); align-items: end; gap: 10px; padding: 12px 13px; border-top: 1px solid var(--border-soft); background: #15161a; }
+.agent-list-controls > p { grid-column: 1 / -1; margin: -1px 0 0; color: var(--subtle); font-size: 7px; }
+.agent-list-controls > p strong { color: var(--text); font-variant-numeric: tabular-nums; }
+.agent-player-filter__input { height: 34px; display: flex; align-items: center; gap: 7px; padding: 0 9px; color: var(--subtle); border: 1px solid var(--border); border-radius: 5px; background: #101114; }
+.agent-player-filter__input input { min-width: 0; width: 100%; color: var(--text); border: 0; outline: 0; background: transparent; font-size: 9px; }
+.agent-player-filter__input input::placeholder { color: var(--subtle); }
 .agent-ranking-list-heading { display: grid; grid-template-columns: 48px 1fr 110px 58px; gap: 10px; padding: 8px 40px 8px 13px; color: var(--subtle); border-top: 1px solid var(--border-soft); border-bottom: 1px solid var(--border-soft); background: #111215; font-size: 6px; font-weight: 900; letter-spacing: .1em; text-transform: uppercase; }
 .agent-ranking-list { margin: 0; padding: 0; list-style: none; }
+.agent-list-empty { min-height: 130px; display: grid; place-items: center; align-content: center; gap: 8px; padding: 20px; color: var(--subtle); text-align: center; }
+.agent-list-empty p { margin: 0; font-size: 8px; }
+.agent-list-empty button { color: var(--amber); border: 0; background: transparent; font-size: 8px; font-weight: 800; cursor: pointer; }
 .agent-ranking-row { border-bottom: 1px solid var(--border-soft); background: var(--surface); }
 .agent-ranking-row:hover, .agent-ranking-row.is-expanded { background: var(--surface-raised); }
 .agent-ranking-row__toggle { width: 100%; min-height: 62px; display: grid; grid-template-columns: 40px 30px minmax(120px, 1fr) 105px 52px 18px; align-items: center; gap: 9px; padding: 7px 13px; color: inherit; border: 0; background: transparent; text-align: left; cursor: pointer; }
@@ -718,6 +732,10 @@ tbody tr:hover { background: rgba(255, 255, 255, .015); }
   .workspace-section__banner p { max-width: 290px; }
   .agent-header-actions .status-pill { display: none; }
   .agent-header-actions > button { width: 36px; height: 36px; }
+  .agent-source-toolbar { grid-template-columns: 1fr; align-items: stretch; }
+  .agent-source-toolbar small { align-self: start; }
+  .agent-list-controls { grid-template-columns: 1fr 1fr; }
+  .agent-list-controls .agent-player-filter { grid-column: 1 / -1; grid-row: 1; }
   .ranking-stats { grid-template-columns: 1fr 1fr; }
   .ranking-stats > div:nth-child(2) { border-right: 0; }
   .ranking-stats > div:nth-child(-n+2) { border-bottom: 1px solid var(--border-soft); }

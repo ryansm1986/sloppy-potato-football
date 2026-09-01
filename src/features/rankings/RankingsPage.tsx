@@ -279,6 +279,9 @@ function AgentSnapshotPanel({
   const [selectedSourceKey, setSelectedSourceKey] = useState("aggregate");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [copyScope, setCopyScope] = useState("ALL");
+  const [listPosition, setListPosition] = useState("ALL");
+  const [playerNameFilter, setPlayerNameFilter] = useState("");
+  const [displayCount, setDisplayCount] = useState("50");
   const latestBySource = useMemo(() => selectLatestSnapshotPerSource(snapshots), [snapshots]);
   const aggregate = useMemo(() => aggregateRankingSnapshots(snapshots), [snapshots]);
   const selectedSource = latestBySource.find((snapshot) => snapshot.source.canonicalKey === selectedSourceKey);
@@ -291,6 +294,27 @@ function AgentSnapshotPanel({
   const displayEntries: DisplayRankingEntry[] = selectedSourceKey === "aggregate"
     ? aggregate?.entries ?? []
     : selected?.entries ?? [];
+  const availablePositions = useMemo(() => {
+    const found = new Set(displayEntries.map((entry) => entry.position).filter((value): value is string => Boolean(value)));
+    const preferredOrder = ["QB", "RB", "WR", "TE", "K", "DST"];
+    return [...found].sort((left, right) => {
+      const leftIndex = preferredOrder.indexOf(left);
+      const rightIndex = preferredOrder.indexOf(right);
+      if (leftIndex === -1 && rightIndex === -1) return left.localeCompare(right);
+      if (leftIndex === -1) return 1;
+      if (rightIndex === -1) return -1;
+      return leftIndex - rightIndex;
+    });
+  }, [displayEntries]);
+  const matchingEntries = useMemo(() => {
+    const normalizedFilter = normalizePlayerName(playerNameFilter);
+    return displayEntries.filter((entry) =>
+      (listPosition === "ALL" || entry.position === listPosition)
+      && (!normalizedFilter || normalizePlayerName(entry.playerName).includes(normalizedFilter)));
+  }, [displayEntries, listPosition, playerNameFilter]);
+  const visibleEntries = displayCount === "ALL"
+    ? matchingEntries
+    : matchingEntries.slice(0, Number(displayCount));
 
   useEffect(() => {
     setSelectedId(null);
@@ -303,9 +327,23 @@ function AgentSnapshotPanel({
     }
   }, [latestBySource, selectedSourceKey]);
 
+  useEffect(() => {
+    if (listPosition !== "ALL" && !availablePositions.includes(listPosition)) setListPosition("ALL");
+  }, [availablePositions, listPosition]);
+
   function selectSource(snapshot: AgentRankingSnapshot) {
     setSelectedSourceKey(snapshot.source.canonicalKey);
     setSelectedId(snapshot.id);
+  }
+
+  function selectSourceKey(sourceKey: string) {
+    if (sourceKey === "aggregate") {
+      setSelectedSourceKey("aggregate");
+      setSelectedId(null);
+      return;
+    }
+    const snapshot = latestBySource.find((item) => item.source.canonicalKey === sourceKey);
+    if (snapshot) selectSource(snapshot);
   }
 
   return (
@@ -357,6 +395,20 @@ function AgentSnapshotPanel({
 
       {selected && (
         <>
+          <div className="agent-source-toolbar">
+            <label>
+              <span>Ranking source</span>
+              <select value={selectedSourceKey} onChange={(event) => selectSourceKey(event.target.value)}>
+                {aggregate && <option value="aggregate">Aggregate · {aggregate.sourceSnapshots.length} source{aggregate.sourceSnapshots.length === 1 ? "" : "s"}</option>}
+                {[...latestBySource]
+                  .sort((left, right) => left.source.name.localeCompare(right.source.name))
+                  .map((snapshot) => (
+                    <option key={snapshot.source.canonicalKey} value={snapshot.source.canonicalKey}>{snapshot.source.name}</option>
+                  ))}
+              </select>
+            </label>
+            <small>Switch between the combined board and each preserved source.</small>
+          </div>
           <div className="agent-source-strip" aria-label="Ranking sources">
             {aggregate && (
               <button
@@ -402,9 +454,30 @@ function AgentSnapshotPanel({
             </div>
           </div>
           {selected.summary && <p className="snapshot-summary">{selected.summary}</p>}
+          <div className="agent-list-controls" aria-label="Agent ranking list controls">
+            <label>
+              <span>Position</span>
+              <select value={listPosition} onChange={(event) => setListPosition(event.target.value)}>
+                <option value="ALL">All positions</option>
+                {availablePositions.map((value) => <option key={value} value={value}>{value}</option>)}
+              </select>
+            </label>
+            <label className="agent-player-filter">
+              <span>Player name</span>
+              <span className="agent-player-filter__input"><Search size={13} aria-hidden="true" /><input value={playerNameFilter} onChange={(event) => setPlayerNameFilter(event.target.value)} placeholder="Find a player" type="search" /></span>
+            </label>
+            <label>
+              <span>Show</span>
+              <select value={displayCount} onChange={(event) => setDisplayCount(event.target.value)}>
+                {[10, 25, 50, 100, 200, 500].map((value) => <option key={value} value={String(value)}>{value} players</option>)}
+                <option value="ALL">All players</option>
+              </select>
+            </label>
+            <p aria-live="polite">Showing <strong>{visibleEntries.length}</strong> of <strong>{matchingEntries.length}</strong> matching player{matchingEntries.length === 1 ? "" : "s"}</p>
+          </div>
           <div className="agent-ranking-list-heading" aria-hidden="true"><span>Rank</span><span>Player</span><span>Source context</span><span>Move</span></div>
-          <ol className="agent-ranking-list">
-            {displayEntries.map((entry) => (
+          <ol className="agent-ranking-list" aria-label="Displayed agent rankings">
+            {visibleEntries.map((entry) => (
               <AgentRankingRow
                 entry={entry}
                 hasOwnerToken={hasOwnerToken}
@@ -414,6 +487,13 @@ function AgentSnapshotPanel({
               />
             ))}
           </ol>
+          {matchingEntries.length === 0 && (
+            <div className="agent-list-empty">
+              <Search size={18} />
+              <p>No players match this position and name filter.</p>
+              <button type="button" onClick={() => { setListPosition("ALL"); setPlayerNameFilter(""); }}>Clear filters</button>
+            </div>
+          )}
           <div className="agent-copy-controls">
             <label>
               Copy

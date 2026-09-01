@@ -289,6 +289,122 @@ describe("research runner bridge", () => {
     expect((await retryCompletion.json<{ idempotent: boolean }>()).idempotent).toBe(true);
   });
 
+  it("ingests a general ranking job as three distinct external source boards", async () => {
+    const suffix = crypto.randomUUID();
+    const runnerId = `multi-source-${suffix}`;
+    await heartbeat(runnerId);
+    const create = await app.request(
+      "https://potato.example/api/research/jobs",
+      jsonRequest("POST", {
+        type: "rankings_research",
+        scoringFormat: "ppr",
+        rankingType: "redraft",
+        position: "ALL",
+        season: "2026",
+        rankingLimit: 100,
+      }, "owner-secret", { "Idempotency-Key": `multi-source-${suffix}` }),
+      sharedBindings,
+    );
+    expect(create.status).toBe(201);
+    const jobId = (await create.json<{ job: { id: string } }>()).job.id;
+    const claim = await app.request(
+      "https://potato.example/api/runners/jobs/claim",
+      jsonRequest("POST", { runnerId }, "runner-secret"),
+      sharedBindings,
+    );
+    const claimed = (await claim.json<{ job: { leaseToken: string; executionContext: string } }>()).job;
+    expect(claimed.executionContext).toContain("at least three distinct reputable publishers");
+
+    const entries = [
+      { playerName: "Bijan Robinson", position: "RB", team: "ATL", rank: 1 },
+      { playerName: "Ja'Marr Chase", position: "WR", team: "CIN", rank: 2 },
+      { playerName: "Josh Allen", position: "QB", team: "BUF", rank: 3 },
+    ];
+    const rankingSnapshots = [
+      { sourceName: "FantasyPros", sourceUrl: "https://www.fantasypros.com/nfl/rankings/ppr-cheatsheets.php" },
+      { sourceName: "RotoWire", sourceUrl: "https://www.rotowire.com/football/rankings.php" },
+      { sourceName: "CBS Sports", sourceUrl: "https://www.cbssports.com/fantasy/football/rankings/" },
+    ].map((source) => ({
+      ...source,
+      title: `${source.sourceName} rankings`,
+      scoringFormat: "standard",
+      rankingType: "dynasty",
+      season: "2025",
+      week: null,
+      summary: null,
+      methodology: null,
+      entries,
+    }));
+    const completion = {
+      runnerId,
+      leaseToken: claimed.leaseToken,
+      resultId: `multi-result-${suffix}`,
+      result: {
+        summary: "Collected three published PPR boards.",
+        generatedAt: "2026-09-01T20:00:00.000Z",
+        citations: rankingSnapshots.map((snapshot) => ({ title: snapshot.sourceName, url: snapshot.sourceUrl })),
+        rankingSnapshot: null,
+        rankingSnapshots,
+      },
+    };
+
+    const quarterbackOnly = rankingSnapshots.map((snapshot) => ({
+      ...snapshot,
+      entries: Array.from({ length: 12 }, (_value, index) => ({
+        playerName: `Quarterback ${index + 1}`,
+        position: "QB",
+        team: "BUF",
+        rank: index + 1,
+      })),
+    }));
+    const rejected = await app.request(
+      `https://potato.example/api/runners/jobs/${jobId}/result`,
+      jsonRequest("POST", {
+        ...completion,
+        resultId: `invalid-all-${suffix}`,
+        result: { ...completion.result, rankingSnapshots: quarterbackOnly },
+      }, "runner-secret"),
+      sharedBindings,
+    );
+    expect(rejected.status).toBe(422);
+
+    const complete = await app.request(
+      `https://potato.example/api/runners/jobs/${jobId}/result`,
+      jsonRequest("POST", completion, "runner-secret"),
+      sharedBindings,
+    );
+    expect(complete.status).toBe(200);
+    const completed = await complete.json<{ rankingSnapshotId: string; rankingSnapshotIds: string[] }>();
+    expect(completed.rankingSnapshotIds).toHaveLength(3);
+    expect(completed.rankingSnapshotId).toBe(completed.rankingSnapshotIds[0]);
+
+    const stored = await env.DB.prepare(
+      `SELECT rs.name, rs.kind, rs.attribution_url, sn.scoring_format, sn.ranking_type,
+              sn.season, sn.position_scope, sn.external_run_id
+       FROM ranking_snapshots sn
+       JOIN ranking_sources rs ON rs.id = sn.source_id
+       WHERE sn.id IN (SELECT value FROM json_each(?))
+       ORDER BY sn.external_run_id`,
+    ).bind(JSON.stringify(completed.rankingSnapshotIds)).all<{
+      name: string; kind: string; attribution_url: string; scoring_format: string;
+      ranking_type: string; season: string; position_scope: string; external_run_id: string;
+    }>();
+    expect(stored.results).toHaveLength(3);
+    expect(stored.results.map((row) => row.kind)).toEqual(["external", "external", "external"]);
+    expect(stored.results.map((row) => row.attribution_url)).toEqual(rankingSnapshots.map((snapshot) => snapshot.sourceUrl));
+    expect(stored.results.every((row) => row.scoring_format === "ppr" && row.ranking_type === "redraft"
+      && row.season === "2026" && row.position_scope === "ALL")).toBe(true);
+
+    const retry = await app.request(
+      `https://potato.example/api/runners/jobs/${jobId}/result`,
+      jsonRequest("POST", completion, "runner-secret"),
+      sharedBindings,
+    );
+    const retried = await retry.json<{ idempotent: boolean; rankingSnapshotIds: string[] }>();
+    expect(retried.idempotent).toBe(true);
+    expect(retried.rankingSnapshotIds).toEqual(completed.rankingSnapshotIds);
+  });
+
   it("requeues retryable runner failures and allows an owner to retry terminal failures", async () => {
     const suffix = crypto.randomUUID();
     const runnerId = `failure-${suffix}`;

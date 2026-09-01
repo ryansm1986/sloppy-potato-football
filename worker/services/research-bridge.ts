@@ -62,6 +62,22 @@ const insightInput = z.object({
   citationUrls: z.array(z.string().url().max(2_000)).max(10).optional(),
 });
 
+const sourcedRankingSnapshotInput = z.object({
+  sourceName: safeLabel,
+  sourceUrl: z.string().url().max(2_000),
+}).passthrough();
+
+const multiSourceRankingInput = z.array(sourcedRankingSnapshotInput).min(3).max(5).superRefine((snapshots, context) => {
+  const names = snapshots.map((snapshot) => snapshot.sourceName.trim().toLowerCase());
+  const hosts = snapshots.map((snapshot) => new URL(snapshot.sourceUrl).hostname.replace(/^www\./, "").toLowerCase());
+  if (new Set(names).size !== names.length || new Set(hosts).size !== hosts.length) {
+    context.addIssue({
+      code: "custom",
+      message: "General ranking research requires at least three distinct publishers and domains",
+    });
+  }
+});
+
 export const completeResearchJobInput = z.object({
   runnerId: z.string().trim().min(3).max(100).regex(/^[A-Za-z0-9._:-]+$/),
   leaseToken: z.string().uuid(),
@@ -72,6 +88,7 @@ export const completeResearchJobInput = z.object({
     citations: z.array(citationInput).max(50).optional().default([]),
     insights: z.array(insightInput).max(100).optional().default([]),
     rankingSnapshot: z.unknown().optional(),
+    rankingSnapshots: z.unknown().optional(),
   }),
 });
 
@@ -179,7 +196,7 @@ function executionContext(row: ResearchJobRow) {
     case "player_research":
       return `Research the named NFL fantasy player (${input.subject}) for ${scope}. Summarize current role, material news, risk, and ranking implications with citations.`;
     case "rankings_research":
-      return `Research a current fantasy-football ranking board for ${scope}${input.subject ? `, focused on ${input.subject}` : ""}. Return the requested Top ${rankingLimit}: exactly ${rankingLimit} contiguous entries when supported by verifiable evidence, or as many verifiable entries as are available up to ${rankingLimit}. Cite reputable sources and return a structured, contiguous ranking snapshot.`;
+      return `Research current fantasy-football ranking boards for ${scope}${input.subject ? `, focused on ${input.subject}` : ""}. Find at least three distinct reputable publishers and preserve each publisher as a separately attributed source board so the app can aggregate them. For EACH source return up to the requested Top ${rankingLimit}: exactly ${rankingLimit} contiguous entries when that publisher exposes them, or every verifiable entry available up to ${rankingLimit}. For ALL, use cross-position overall boards rather than quarterback-only or separate positional lists. Cite direct ranking URLs; never synthesize an agent-authored source.`;
   }
 }
 
@@ -191,6 +208,17 @@ async function insertEvent(db: Database, jobId: string, type: string, actorType:
 
 async function findJob(db: Database, id: string) {
   return db.$client.prepare("SELECT * FROM research_jobs WHERE id = ?").bind(id).first<ResearchJobRow>();
+}
+
+async function findJobRankingSnapshotIds(db: Database, jobId: string) {
+  const singleRunId = `research-job:${jobId}`;
+  const multiRunPrefix = `${singleRunId}:`;
+  const rows = await db.$client.prepare(
+    `SELECT id FROM ranking_snapshots
+     WHERE external_run_id = ? OR instr(external_run_id, ?) = 1
+     ORDER BY external_run_id`,
+  ).bind(singleRunId, multiRunPrefix).all<{ id: string }>();
+  return rows.results.map((row) => row.id);
 }
 
 export async function createResearchJob(
@@ -397,43 +425,120 @@ function assertActiveLease(row: ResearchJobRow, runnerId: string, leaseToken: st
   }
 }
 
+function sourceSlug(name: string, fallback: string) {
+  return name.toLowerCase().normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 63) || fallback;
+}
+
+function assertPositionCoverage(entries: Array<{ position?: string | null }>, requestedPosition: z.infer<typeof position>) {
+  const normalized = entries.flatMap((entry) => {
+    if (!entry.position) return [];
+    const value = entry.position.trim().toUpperCase();
+    return [value === "DEF" ? "DST" : value];
+  });
+  z.unknown().superRefine((_value, context) => {
+    if (requestedPosition === "ALL") {
+      if (entries.length >= 12 && new Set(normalized).size < 2) {
+        context.addIssue({ code: "custom", message: "An ALL ranking board must span multiple player positions" });
+      }
+      if (entries.length >= 25 && new Set(normalized).size < 3) {
+        context.addIssue({ code: "custom", message: "A large ALL ranking board must span at least three player positions" });
+      }
+      return;
+    }
+    // Some publishers include a few out-of-position flex or comparison rows on
+    // positional pages. Position scope is server-owned metadata, so retain those
+    // rows instead of rejecting an otherwise verifiable published board.
+  }).parse(entries);
+}
+
 export async function completeResearchJob(db: Database, jobId: string, input: z.infer<typeof completeResearchJobInput>) {
   const row = await findJob(db, jobId);
   if (!row) throw new ResearchBridgeError("not_found", "Research job not found", 404);
   if (row.status === "completed") {
     if (row.completion_key !== input.resultId) throw new ResearchBridgeError("result_conflict", "This job already has a different result", 409);
-    return { job: toPublicJob(row), idempotent: true, rankingSnapshotId: row.ranking_snapshot_id };
+    const rankingSnapshotIds = await findJobRankingSnapshotIds(db, jobId);
+    return { job: toPublicJob(row), idempotent: true, rankingSnapshotId: row.ranking_snapshot_id, rankingSnapshotIds };
   }
   const now = Date.now();
   assertActiveLease(row, input.runnerId, input.leaseToken, now);
 
-  let rankingSnapshotId: string | null = null;
-  if (input.result.rankingSnapshot !== undefined) {
-    const taskInput = parseJson<z.infer<typeof createResearchJobInput>>(row.task_input_json, {} as never);
-    const runner = await db.$client.prepare("SELECT provider FROM research_runners WHERE id = ?")
-      .bind(input.runnerId).first<{ provider: string }>();
-    const provider = runner?.provider === "claude" ? "claude" : "codex";
+  const taskInput = parseJson<z.infer<typeof createResearchJobInput>>(row.task_input_json, {} as never);
+  const runner = await db.$client.prepare("SELECT provider FROM research_runners WHERE id = ?")
+    .bind(input.runnerId).first<{ provider: string }>();
+  const provider = runner?.provider === "claude" ? "claude" : "codex";
+  const generatedAt = input.result.generatedAt ?? new Date(now).toISOString();
+  const snapshotsToCreate: Array<z.infer<typeof rankingSnapshotInput>> = [];
+
+  if (input.result.rankingSnapshots !== undefined && input.result.rankingSnapshots !== null) {
+    if (row.job_type !== "rankings_research") {
+      z.never().parse(input.result.rankingSnapshots);
+    }
+    const sourcedSnapshots = multiSourceRankingInput.parse(input.result.rankingSnapshots);
+    for (const [index, rawSnapshot] of sourcedSnapshots.entries()) {
+      const fields = { ...rawSnapshot } as Record<string, unknown>;
+      delete fields.source;
+      delete fields.externalRunId;
+      delete fields.generatedAt;
+      delete fields.positionScope;
+      delete fields.sourceName;
+      delete fields.sourceUrl;
+      const slug = sourceSlug(rawSnapshot.sourceName, `rankings-source-${index + 1}`);
+      const domain = new URL(rawSnapshot.sourceUrl).hostname.replace(/^www\./, "").toLowerCase();
+      const snapshot = rankingSnapshotInput.parse({
+        ...fields,
+        scoringFormat: taskInput.scoringFormat ?? "ppr",
+        rankingType: taskInput.rankingType ?? "redraft",
+        season: taskInput.season ?? fields.season,
+        week: taskInput.week ?? fields.week ?? null,
+        source: {
+          canonicalKey: `external:${slug}`,
+          slug,
+          name: rawSnapshot.sourceName,
+          kind: "external",
+          attributionUrl: rawSnapshot.sourceUrl,
+          aliases: [
+            { type: "name", value: rawSnapshot.sourceName },
+            { type: "url", value: rawSnapshot.sourceUrl },
+            { type: "domain", value: domain },
+          ],
+          provenance: { discoveredBy: provider, researchJobId: jobId },
+        },
+        generatedAt,
+        externalRunId: `research-job:${jobId}:${index + 1}`,
+        positionScope: taskInput.position ?? "ALL",
+      });
+      assertPositionCoverage(snapshot.entries, taskInput.position ?? "ALL");
+      snapshotsToCreate.push(snapshot);
+    }
+  } else if (input.result.rankingSnapshot !== undefined && input.result.rankingSnapshot !== null) {
+    // Legacy single-snapshot results remain accepted for in-flight runners and
+    // source_refresh jobs. New rankings_research prompts use rankingSnapshots.
     const rawSnapshot = input.result.rankingSnapshot as Record<string, unknown>;
     const rawSourceUrl = typeof rawSnapshot.sourceUrl === "string" ? rawSnapshot.sourceUrl : undefined;
     const sourceName = row.job_type === "source_refresh"
       ? taskInput.sourceName!
       : `Sloppy Potato ${provider === "claude" ? "Claude" : "Codex"} Research`;
-    const sourceSlug = sourceName.toLowerCase().normalize("NFKD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-|-$/g, "")
-      .slice(0, 63) || `${provider}-research`;
+    const slug = sourceSlug(sourceName, `${provider}-research`);
     const snapshotFields = { ...rawSnapshot };
     delete snapshotFields.source;
     delete snapshotFields.externalRunId;
     delete snapshotFields.generatedAt;
+    delete snapshotFields.positionScope;
     delete snapshotFields.sourceName;
     delete snapshotFields.sourceUrl;
     const snapshot = rankingSnapshotInput.parse({
       ...snapshotFields,
+      scoringFormat: taskInput.scoringFormat ?? "ppr",
+      rankingType: taskInput.rankingType ?? "redraft",
+      season: taskInput.season ?? snapshotFields.season,
+      week: taskInput.week ?? snapshotFields.week ?? null,
       source: row.job_type === "source_refresh" ? {
-        canonicalKey: `external:${sourceSlug}`,
-        slug: sourceSlug,
+        canonicalKey: `external:${slug}`,
+        slug,
         name: sourceName,
         kind: "external",
         attributionUrl: rawSourceUrl,
@@ -444,13 +549,20 @@ export async function completeResearchJob(db: Database, jobId: string, input: z.
         kind: "agent",
         provider,
       },
-      generatedAt: input.result.generatedAt ?? new Date(now).toISOString(),
+      generatedAt,
       externalRunId: `research-job:${jobId}`,
       positionScope: taskInput.position ?? "ALL",
     });
-    const created = await createRankingSnapshot(db, snapshot);
-    rankingSnapshotId = created.id;
+    assertPositionCoverage(snapshot.entries, taskInput.position ?? "ALL");
+    snapshotsToCreate.push(snapshot);
   }
+
+  const rankingSnapshotIds: string[] = [];
+  for (const snapshot of snapshotsToCreate) {
+    const created = await createRankingSnapshot(db, snapshot);
+    rankingSnapshotIds.push(created.id);
+  }
+  const rankingSnapshotId = rankingSnapshotIds[0] ?? null;
   const resultJson = JSON.stringify(input.result);
   const updated = await db.$client.prepare(
     `UPDATE research_jobs SET status = 'completed', completion_key = ?, result_json = ?,
@@ -461,8 +573,8 @@ export async function completeResearchJob(db: Database, jobId: string, input: z.
   await db.$client.prepare(
     "UPDATE research_runners SET status = 'idle', current_job_id = NULL, last_seen_at = ?, updated_at = ? WHERE id = ? AND current_job_id = ?",
   ).bind(now, now, input.runnerId, jobId).run();
-  await insertEvent(db, jobId, "completed", "runner", input.runnerId, { resultId: input.resultId, rankingSnapshotId });
-  return { job: toPublicJob((await findJob(db, jobId))!), idempotent: false, rankingSnapshotId };
+  await insertEvent(db, jobId, "completed", "runner", input.runnerId, { resultId: input.resultId, rankingSnapshotId, rankingSnapshotIds });
+  return { job: toPublicJob((await findJob(db, jobId))!), idempotent: false, rankingSnapshotId, rankingSnapshotIds };
 }
 
 export async function failResearchJob(db: Database, jobId: string, input: z.infer<typeof failResearchJobInput>) {

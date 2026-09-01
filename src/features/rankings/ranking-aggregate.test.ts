@@ -25,6 +25,8 @@ function makeSnapshot(id: string, overrides: SnapshotOverrides = {}): AgentRanki
     season: overrides.season ?? "2026",
     week: overrides.week === undefined ? null : overrides.week,
     generatedAt: overrides.generatedAt ?? "2026-09-01T12:00:00.000Z",
+    createdAt: overrides.createdAt,
+    savedAt: overrides.savedAt,
     summary: overrides.summary ?? null,
     methodology: overrides.methodology ?? null,
     entries: (overrides.entries ?? []).map((entry, index) => ({
@@ -48,6 +50,22 @@ describe("ranking aggregation", () => {
     const other = makeSnapshot("other", { source: { canonicalKey: "expert:b" }, generatedAt: "2026-08-15T00:00:00Z" });
 
     expect(selectLatestSnapshotPerSource([old, other, latest]).map((snapshot) => snapshot.id)).toEqual(["latest", "other"]);
+  });
+
+  it("prefers the most recently saved revision even when its publisher timestamp is older", () => {
+    const quarterback = makeSnapshot("quarterback", {
+      source: { canonicalKey: "agent:codex-research" },
+      generatedAt: "2026-09-01T17:00:00Z",
+      createdAt: "2026-09-01T21:06:58Z",
+    });
+    const overall = makeSnapshot("overall", {
+      source: { canonicalKey: "agent:codex-research" },
+      generatedAt: "2026-09-01T05:00:00Z",
+      createdAt: "2026-09-01T22:40:26Z",
+      positionScope: "ALL",
+    });
+
+    expect(selectLatestSnapshotPerSource([quarterback, overall]).map((snapshot) => snapshot.id)).toEqual(["overall"]);
   });
 
   it("anchors scope to the newest snapshot and excludes incompatible scoring, type, season, and week", () => {

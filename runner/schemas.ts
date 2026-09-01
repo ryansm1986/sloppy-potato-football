@@ -39,6 +39,23 @@ const rankingEntrySchema = z.object({
   insight: z.string().trim().max(600).nullable(),
 }).strict();
 
+const rankingSnapshotSchema = z.object({
+  sourceUrl: z.string().url().max(2_000).nullable(),
+  title: boundedText(140),
+  scoringFormat: scoringFormatSchema,
+  rankingType: rankingTypeSchema,
+  season: z.string().regex(/^20\d{2}$/),
+  week: z.number().int().min(1).max(25).nullable(),
+  summary: z.string().trim().max(1_500).nullable(),
+  methodology: z.string().trim().max(2_000).nullable(),
+  entries: z.array(rankingEntrySchema).min(1).max(500),
+}).strict();
+
+const sourcedRankingSnapshotSchema = rankingSnapshotSchema.extend({
+  sourceName: boundedText(100),
+  sourceUrl: z.string().url().max(2_000),
+}).strict();
+
 export const researchResultSchema = z.object({
   summary: boundedText(5_000),
   generatedAt: z.string().datetime({ offset: true }),
@@ -55,23 +72,28 @@ export const researchResultSchema = z.object({
     confidence: z.enum(["low", "medium", "high"]).nullable(),
     citationUrls: z.array(z.string().url().max(2_000)).max(10),
   }).strict()).max(100),
-  rankingSnapshot: z.object({
-    sourceUrl: z.string().url().max(2_000).nullable(),
-    title: boundedText(140),
-    scoringFormat: scoringFormatSchema,
-    rankingType: rankingTypeSchema,
-    season: z.string().regex(/^20\d{2}$/),
-    week: z.number().int().min(1).max(25).nullable(),
-    summary: z.string().trim().max(1_500).nullable(),
-    methodology: z.string().trim().max(2_000).nullable(),
-    entries: z.array(rankingEntrySchema).min(1).max(500),
-  }).strict().nullable(),
+  rankingSnapshot: rankingSnapshotSchema.nullable(),
+  // A general rankings job returns the published boards separately so the app can
+  // preserve source provenance and calculate its own aggregate. Three to five
+  // sources bounds both research cost and result size.
+  rankingSnapshots: z.array(sourcedRankingSnapshotSchema).min(3).max(5).nullable().optional(),
 }).strict().superRefine((result, context) => {
-  const ranks = result.rankingSnapshot?.entries.map((entry) => entry.rank);
-  if (!ranks) return;
-  const sorted = [...ranks].sort((left, right) => left - right);
-  if (new Set(ranks).size !== ranks.length || sorted.some((rank, index) => rank !== index + 1)) {
-    context.addIssue({ code: "custom", path: ["rankingSnapshot", "entries"], message: "Ranks must be unique and contiguous from 1" });
+  const snapshots = [
+    ...(result.rankingSnapshot ? [{ path: "rankingSnapshot", snapshot: result.rankingSnapshot }] : []),
+    ...(result.rankingSnapshots ?? []).map((snapshot, index) => ({ path: `rankingSnapshots.${index}`, snapshot })),
+  ];
+  for (const { path, snapshot } of snapshots) {
+    const ranks = snapshot.entries.map((entry) => entry.rank);
+    const sorted = [...ranks].sort((left, right) => left - right);
+    if (new Set(ranks).size !== ranks.length || sorted.some((rank, index) => rank !== index + 1)) {
+      context.addIssue({ code: "custom", path: [...path.split("."), "entries"], message: "Ranks must be unique and contiguous from 1" });
+    }
+  }
+  const sources = result.rankingSnapshots ?? [];
+  const sourceNames = sources.map((snapshot) => snapshot.sourceName.trim().toLowerCase());
+  const sourceHosts = sources.map((snapshot) => new URL(snapshot.sourceUrl).hostname.replace(/^www\./, "").toLowerCase());
+  if (new Set(sourceNames).size !== sourceNames.length || new Set(sourceHosts).size !== sourceHosts.length) {
+    context.addIssue({ code: "custom", path: ["rankingSnapshots"], message: "Ranking research sources must use distinct publishers and source URLs" });
   }
 });
 

@@ -22,6 +22,8 @@ export type AgentRankingSnapshot = {
   week: number | null;
   positionScope?: string;
   generatedAt: string;
+  createdAt?: string;
+  savedAt?: string;
   summary: string | null;
   methodology: string | null;
   entries: AgentRankingEntry[];

@@ -53,6 +53,10 @@ describe("buildResearchPrompt", () => {
 
     expect(prompt).toContain("requested Top 200");
     expect(prompt).toContain("exactly 200 contiguous entries");
+    expect(prompt).toContain("3 to 5 separately attributed published boards");
+    expect(prompt).toContain("distinct reputable publishers with distinct domains");
+    expect(prompt).toContain("ALL never means a quarterback-only list");
+    expect(prompt).toContain("app computes the aggregate");
     expect(prompt.length).toBeLessThanOrEqual(8_000);
   });
 });

@@ -39,8 +39,10 @@ function timestamp(value: string): number {
 }
 
 function compareNewest(left: AgentRankingSnapshot, right: AgentRankingSnapshot): number {
-  return timestamp(right.generatedAt) - timestamp(left.generatedAt)
-    || right.generatedAt.localeCompare(left.generatedAt)
+  const leftSavedAt = left.savedAt ?? left.createdAt ?? left.generatedAt;
+  const rightSavedAt = right.savedAt ?? right.createdAt ?? right.generatedAt;
+  return timestamp(rightSavedAt) - timestamp(leftSavedAt)
+    || rightSavedAt.localeCompare(leftSavedAt)
     || right.id.localeCompare(left.id);
 }
 

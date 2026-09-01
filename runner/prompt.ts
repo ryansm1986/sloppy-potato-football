@@ -10,7 +10,7 @@ export function buildResearchPrompt(job: ResearchJob): string {
   const rankingRequest = job.type === "source_refresh"
     ? `Ranking count: collect up to the requested Top ${rankingLimit}, capped at ${rankingLimit}; include every verifiable entry the named source publishes up to that count.`
     : job.type === "rankings_research"
-      ? `Ranking count: return the requested Top ${rankingLimit}; produce exactly ${rankingLimit} contiguous entries when verifiable evidence supports them, otherwise return as many verifiable entries as are available up to ${rankingLimit}.`
+      ? `Ranking count: for EACH source, return up to the requested Top ${rankingLimit}; produce exactly ${rankingLimit} contiguous entries when that publisher exposes them, otherwise return every verifiable entry available up to ${rankingLimit}.`
       : null;
   const lines = [
     "You are the bounded fantasy-football research runner for Sloppy Potato Fantasy Football.",
@@ -20,7 +20,11 @@ export function buildResearchPrompt(job: ResearchJob): string {
     "Material factual claims must have citations. State insufficient evidence in the summary when the available evidence does not support a responsible conclusion.",
     "Return only the JSON object required by the supplied output schema. All nullable properties must be present and set to null when unavailable.",
     "Every citation URL referenced by an insight must also appear in citations. Return empty arrays when there are no citations or insights.",
-    "If returning rankingSnapshot, use the target source URL when known and ranks that are unique and contiguous from 1. Otherwise return rankingSnapshot as null.",
+    "For source_refresh, return the named publisher's board in rankingSnapshot and set rankingSnapshots to null. For player_research, set both rankingSnapshot and rankingSnapshots to null.",
+    "For rankings_research, set rankingSnapshot to null and return 3 to 5 separately attributed published boards in rankingSnapshots. Use at least 3 distinct reputable publishers with distinct domains; never present a synthetic agent ranking as a source.",
+    "Preserve each publisher's own player order exactly, use its direct rankings page URL, and do not merge sources. The app computes the aggregate after ingestion.",
+    "If the requested position is ALL, each source must be an overall/flex-style board spanning multiple positions with one contiguous cross-position rank order. ALL never means a quarterback-only list or separate per-position rank sequences.",
+    "Every returned ranking board must use ranks that are unique and contiguous from 1. If fewer than 3 qualifying published sources can be verified, return no ranking boards and explain the insufficient evidence rather than fabricating data.",
     "",
     "BEGIN SERVER-VALIDATED ASSIGNMENT DATA",
     `Task: ${normalize(job.executionContext, 2_000)}`,

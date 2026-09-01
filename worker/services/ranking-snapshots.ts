@@ -207,18 +207,18 @@ export async function getRankingSnapshots(db: Database, limit: number, query: Ra
   }
 
   const rankProjection = parsedQuery.latestPerSource
-    ? "ROW_NUMBER() OVER (PARTITION BY sn.source_id ORDER BY sn.generated_at DESC, sn.id DESC) AS source_rank"
+    ? "ROW_NUMBER() OVER (PARTITION BY sn.source_id ORDER BY sn.created_at DESC, sn.id DESC) AS source_rank"
     : "1 AS source_rank";
   const selectedSnapshotIds = await db.$client.prepare(
     `WITH scoped AS (
-       SELECT sn.id, sn.generated_at, ${rankProjection}
+       SELECT sn.id, sn.created_at, ${rankProjection}
        FROM ranking_snapshots sn
        INNER JOIN ranking_sources rs ON rs.id = sn.source_id
        WHERE ${clauses.join(" AND ")}
      )
      SELECT id FROM scoped
      WHERE source_rank = 1
-     ORDER BY generated_at DESC, id DESC
+     ORDER BY created_at DESC, id DESC
      LIMIT ?`,
   ).bind(...bindings, limit).all<{ id: string }>();
   const snapshotIds = selectedSnapshotIds.results.map((row) => row.id);
@@ -241,6 +241,7 @@ export async function getRankingSnapshots(db: Database, limit: number, query: Ra
       week: rankingSnapshots.week,
       positionScope: rankingSnapshots.positionScope,
       generatedAt: rankingSnapshots.generatedAt,
+      createdAt: rankingSnapshots.createdAt,
       summary: rankingSnapshots.summary,
       methodology: rankingSnapshots.methodology,
     })
@@ -282,6 +283,8 @@ export async function getRankingSnapshots(db: Database, limit: number, query: Ra
     week: snapshot.week,
     positionScope: snapshot.positionScope,
     generatedAt: snapshot.generatedAt,
+    createdAt: snapshot.createdAt,
+    savedAt: snapshot.createdAt,
     summary: snapshot.summary,
     methodology: snapshot.methodology,
     entries: (entriesBySnapshot.get(snapshot.id) ?? []).map((entry) => ({

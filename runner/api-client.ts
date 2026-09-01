@@ -56,6 +56,7 @@ export class RunnerApiClient {
         citationUrls: insight.citationUrls,
       })),
       ...(result.rankingSnapshot ? { rankingSnapshot: result.rankingSnapshot } : {}),
+      ...(result.rankingSnapshots ? { rankingSnapshots: result.rankingSnapshots } : {}),
     };
     await this.request(`/api/runners/jobs/${encodeURIComponent(jobId)}/result`, {
       runnerId: this.config.runnerId,
