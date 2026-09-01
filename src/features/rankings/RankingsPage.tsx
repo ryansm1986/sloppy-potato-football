@@ -60,6 +60,7 @@ import {
   toggleFavoriteSource,
   type RankingsPreferences,
 } from "./ranking-preferences";
+import { derivePositionRanks, type PositionRank } from "./ranking-position";
 import {
   applyAgentOrder,
   loadPersonalRankings,
@@ -86,11 +87,13 @@ function relativeTime(value: string): string {
 function SortableRankingRow({
   player,
   rank,
+  positionRank,
   total,
   onMove,
 }: {
   player: RankingPlayer;
   rank: number;
+  positionRank: PositionRank;
   total: number;
   onMove: (playerId: string, direction: "up" | "down") => void;
 }) {
@@ -108,13 +111,16 @@ function SortableRankingRow({
       <button
         className="drag-handle"
         type="button"
-        aria-label={`Reorder ${player.name}, currently rank ${rank}`}
+        aria-label={`Reorder ${player.name}, currently overall rank ${rank} and ${positionRank.position} rank ${positionRank.rank}`}
         {...attributes}
         {...listeners}
       >
         <GripVertical size={17} />
       </button>
-      <strong className="ranking-number">{rank}</strong>
+      <span className="ranking-rank-pair" aria-label={`Overall rank ${rank}; ${positionRank.position} rank ${positionRank.rank}`}>
+        <span><small>OVR</small><strong className="ranking-number">{rank}</strong></span>
+        <span><small>{positionRank.position}</small><strong className="ranking-position-number">#{positionRank.rank}</strong></span>
+      </span>
       <span className="position-orb">{player.position}</span>
       <div className="ranking-player">
         <strong>{player.name}</strong>
@@ -157,11 +163,15 @@ function isAggregateEntry(entry: DisplayRankingEntry): entry is AggregatedRankin
 
 function AgentRankingRow({
   entry,
+  positionRank,
+  hasOverallRank,
   snapshot,
   researchJob,
   hasOwnerToken,
 }: {
   entry: DisplayRankingEntry;
+  positionRank?: PositionRank;
+  hasOverallRank: boolean;
   snapshot: AgentRankingSnapshot;
   researchJob?: ResearchJob;
   hasOwnerToken: boolean;
@@ -171,6 +181,9 @@ function AgentRankingRow({
   const movement = entry.previousRank === null ? null : entry.previousRank - entry.rank;
   const research = researchJob?.result;
   const aggregateEntry = isAggregateEntry(entry) ? entry : null;
+  const rankLabel = positionRank
+    ? `${hasOverallRank ? `Overall rank ${entry.rank}` : "Overall rank unavailable"}; ${positionRank.position} rank ${positionRank.rank}`
+    : hasOverallRank ? `Overall rank ${entry.rank}` : "Overall rank unavailable";
 
   return (
     <li className={`agent-ranking-row${expanded ? " is-expanded" : ""}`}>
@@ -181,7 +194,13 @@ function AgentRankingRow({
         aria-controls={detailsId}
         onClick={() => setExpanded((current) => !current)}
       >
-        <strong className="agent-ranking-number">{entry.rank}</strong>
+        <span
+          className="agent-ranking-rank-pair"
+          aria-label={rankLabel}
+        >
+          <span><small>OVR</small><strong className="agent-ranking-number">{hasOverallRank ? entry.rank : "—"}</strong></span>
+          {positionRank && <span><small>{positionRank.position}</small><strong className="agent-position-rank">#{positionRank.rank}</strong></span>}
+        </span>
         <span className="position-orb">{entry.position ?? "?"}</span>
         <span className="agent-ranking-player">
           <strong>{entry.playerName}</strong>
@@ -294,6 +313,14 @@ function AgentSnapshotPanel({
   const displayEntries: DisplayRankingEntry[] = selectedSourceKey === "aggregate"
     ? aggregate?.entries ?? []
     : selected?.entries ?? [];
+  const positionRanks = useMemo(
+    () => derivePositionRanks(displayEntries, (entry) => entry.id, (entry) => entry.position),
+    [displayEntries],
+  );
+  const selectedPositionScope = selected?.positionScope ?? (() => {
+    const entryPositions = [...new Set(displayEntries.map((entry) => entry.position).filter(Boolean))];
+    return entryPositions.length === 1 ? entryPositions[0] : "ALL";
+  })();
   const availablePositions = useMemo(() => {
     const found = new Set(displayEntries.map((entry) => entry.position).filter((value): value is string => Boolean(value)));
     const preferredOrder = ["QB", "RB", "WR", "TE", "K", "DST"];
@@ -475,13 +502,15 @@ function AgentSnapshotPanel({
             </label>
             <p aria-live="polite">Showing <strong>{visibleEntries.length}</strong> of <strong>{matchingEntries.length}</strong> matching player{matchingEntries.length === 1 ? "" : "s"}</p>
           </div>
-          <div className="agent-ranking-list-heading" aria-hidden="true"><span>Rank</span><span>Player</span><span>Source context</span><span>Move</span></div>
+          <div className="agent-ranking-list-heading" aria-hidden="true"><span>OVR / POS</span><span>Player</span><span>Source context</span><span>Move</span></div>
           <ol className="agent-ranking-list" aria-label="Displayed agent rankings">
             {visibleEntries.map((entry) => (
               <AgentRankingRow
                 entry={entry}
                 hasOwnerToken={hasOwnerToken}
+                hasOverallRank={selectedPositionScope === "ALL"}
                 key={entry.id}
+                positionRank={positionRanks.get(entry.id)}
                 researchJob={researchByPlayer.get(normalizePlayerName(entry.playerName))}
                 snapshot={selected}
               />
@@ -609,6 +638,10 @@ export default function RankingsPage() {
       (position === "ALL" || player.position === position) &&
       (!normalizedQuery || `${player.name} ${player.team}`.toLowerCase().includes(normalizedQuery)));
   }, [position, query, rankings]);
+  const personalPositionRanks = useMemo(
+    () => derivePositionRanks(rankings, (player) => player.id, (player) => player.position),
+    [rankings],
+  );
 
   function announceMove(playerId: string, before: RankingPlayer[], after: RankingPlayer[]) {
     const player = before.find((item) => item.id === playerId);
@@ -693,7 +726,7 @@ export default function RankingsPage() {
           </button>
         </div>
         <div className="ranking-column-labels" aria-hidden="true">
-          <span>Rank / player</span><span>Market</span><span>Difference</span><span>Move</span>
+          <span>OVR / POS · Player</span><span>Market</span><span>Difference</span><span>Move</span>
         </div>
         <DndContext collisionDetection={closestCenter} onDragEnd={handleDragEnd} sensors={sensors}>
           <SortableContext items={visibleRankings.map((player) => player.id)} strategy={verticalListSortingStrategy}>
@@ -703,6 +736,7 @@ export default function RankingsPage() {
                   key={player.id}
                   player={player}
                   rank={rankings.findIndex((item) => item.id === player.id) + 1}
+                  positionRank={personalPositionRanks.get(player.id)!}
                   total={rankings.length}
                   onMove={handleMove}
                 />
