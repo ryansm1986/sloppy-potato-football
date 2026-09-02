@@ -11,6 +11,7 @@ import {
   Search,
   ShieldCheck,
   Sparkles,
+  Telescope,
   TableProperties,
   TrendingUp,
   Trophy,
@@ -21,6 +22,7 @@ import { NavLink, Route, Routes } from "react-router";
 import { lineup, movers, news } from "./data";
 import RankingsPage from "./features/rankings/RankingsPage";
 import ResearchDeskPage from "./features/research/ResearchDeskPage";
+import SleepersPage from "./features/sleepers/SleepersPage";
 
 type Icon = ComponentType<{ size?: number; strokeWidth?: number }>;
 
@@ -29,6 +31,7 @@ const navigation: Array<{ label: string; path: string; icon: Icon }> = [
   { label: "My Team", path: "/team", icon: Users },
   { label: "Players", path: "/players", icon: Search },
   { label: "Rankings", path: "/rankings", icon: Trophy },
+  { label: "Sleepers", path: "/sleepers", icon: Telescope },
   { label: "Draft Board", path: "/draft", icon: ClipboardList },
   { label: "Research Desk", path: "/research", icon: Bot },
 ];
@@ -119,6 +122,7 @@ function AppShell() {
           <Route path="team" element={<ComingSoon title="My Team" icon={Users} />} />
           <Route path="players" element={<ComingSoon title="Players" icon={Search} />} />
           <Route path="rankings" element={<RankingsPage />} />
+          <Route path="sleepers" element={<SleepersPage />} />
           <Route path="draft" element={<ComingSoon title="Draft Board" icon={ClipboardList} />} />
           <Route path="research" element={<ResearchDeskPage />} />
         </Routes>

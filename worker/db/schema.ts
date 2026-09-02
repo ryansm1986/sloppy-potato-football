@@ -491,6 +491,78 @@ export const researchJobEvents = sqliteTable(
   (table) => [index("research_job_events_job_created_idx").on(table.jobId, table.createdAt)],
 );
 
+export const sleeperReports = sqliteTable(
+  "sleeper_reports",
+  {
+    id: text("id").primaryKey(),
+    jobId: text("job_id").notNull().references(() => researchJobs.id, { onDelete: "cascade" }),
+    season: text("season").notNull(),
+    scoringFormat: text("scoring_format").notNull(),
+    rankingType: text("ranking_type").notNull(),
+    leagueSize: integer("league_size").notNull(),
+    summary: text("summary").notNull(),
+    generatedAt: integer("generated_at", { mode: "timestamp_ms" }).notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().default(nowMs),
+    publishedAt: integer("published_at", { mode: "timestamp_ms" }),
+  },
+  (table) => [
+    uniqueIndex("sleeper_reports_job_unique").on(table.jobId),
+    index("sleeper_reports_latest_idx").on(table.publishedAt, table.id),
+  ],
+);
+
+export const sleeperPositionSummaries = sqliteTable(
+  "sleeper_position_summaries",
+  {
+    reportId: text("report_id").notNull().references(() => sleeperReports.id, { onDelete: "cascade" }),
+    position: text("position").notNull(),
+    summary: text("summary").notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.reportId, table.position] })],
+);
+
+export const sleeperCandidates = sqliteTable(
+  "sleeper_candidates",
+  {
+    id: text("id").primaryKey(),
+    reportId: text("report_id").notNull().references(() => sleeperReports.id, { onDelete: "cascade" }),
+    position: text("position").notNull(),
+    positionRank: integer("position_rank").notNull(),
+    playerName: text("player_name").notNull(),
+    team: text("team"),
+    sourceCount: integer("source_count").notNull(),
+    recommendedPickStart: integer("recommended_pick_start").notNull(),
+    recommendedPickEnd: integer("recommended_pick_end").notNull(),
+    summary: text("summary").notNull(),
+    upside: text("upside"),
+    risk: text("risk"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().default(nowMs),
+  },
+  (table) => [
+    uniqueIndex("sleeper_candidates_report_player_unique").on(table.reportId, table.position, table.playerName),
+    index("sleeper_candidates_report_position_rank_idx").on(table.reportId, table.position, table.positionRank, table.id),
+  ],
+);
+
+export const sleeperCandidateSources = sqliteTable(
+  "sleeper_candidate_sources",
+  {
+    id: text("id").primaryKey(),
+    candidateId: text("candidate_id").notNull().references(() => sleeperCandidates.id, { onDelete: "cascade" }),
+    publisher: text("publisher").notNull(),
+    title: text("title").notNull(),
+    url: text("url").notNull(),
+    sourceDomain: text("source_domain").notNull(),
+    publishedAt: integer("published_at", { mode: "timestamp_ms" }),
+    recommendation: text("recommendation"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().default(nowMs),
+  },
+  (table) => [
+    uniqueIndex("sleeper_candidate_sources_domain_unique").on(table.candidateId, table.sourceDomain),
+    index("sleeper_candidate_sources_candidate_idx").on(table.candidateId, table.publisher, table.id),
+  ],
+);
+
 export type Player = typeof players.$inferSelect;
 export type NewPlayer = typeof players.$inferInsert;
 export type League = typeof leagues.$inferSelect;

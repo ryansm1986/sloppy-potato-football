@@ -59,4 +59,26 @@ describe("buildResearchPrompt", () => {
     expect(prompt).toContain("app computes the aggregate");
     expect(prompt.length).toBeLessThanOrEqual(8_000);
   });
+
+  it("bounds sleeper research and leaves ranking and round derivation to the server", () => {
+    const prompt = buildResearchPrompt({
+      ...job,
+      type: "sleepers_research",
+      input: {
+        type: "sleepers_research",
+        scoringFormat: "ppr",
+        rankingType: "redraft",
+        position: "ALL",
+        season: "2026",
+        leagueSize: 12,
+        sleepersPerPosition: 8,
+      },
+      executionContext: "Research PPR redraft sleepers across QB, RB, WR, and TE.",
+    });
+
+    expect(prompt).toContain("up to 8 candidates per position");
+    expect(prompt).toContain("at least three independent reputable publisher domains");
+    expect(prompt).toContain("OVERALL draft pick");
+    expect(prompt).toContain("server derives them");
+  });
 });

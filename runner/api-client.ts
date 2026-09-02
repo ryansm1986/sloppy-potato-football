@@ -27,7 +27,7 @@ export class RunnerApiClient {
       provider: "codex",
       version: "0.1.0",
       status,
-      capabilities: ["source_refresh", "player_research", "rankings_research"],
+      capabilities: ["source_refresh", "player_research", "rankings_research", "sleepers_research"],
     }, { signal, retries: 2 });
   }
 
@@ -57,6 +57,7 @@ export class RunnerApiClient {
       })),
       ...(result.rankingSnapshot ? { rankingSnapshot: result.rankingSnapshot } : {}),
       ...(result.rankingSnapshots ? { rankingSnapshots: result.rankingSnapshots } : {}),
+      ...(result.sleeperReport ? { sleeperReport: result.sleeperReport } : {}),
     };
     await this.request(`/api/runners/jobs/${encodeURIComponent(jobId)}/result`, {
       runnerId: this.config.runnerId,

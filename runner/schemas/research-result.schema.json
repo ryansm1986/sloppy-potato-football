@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["summary", "generatedAt", "citations", "insights", "rankingSnapshot", "rankingSnapshots"],
+  "required": ["summary", "generatedAt", "citations", "insights", "rankingSnapshot", "rankingSnapshots", "sleeperReport"],
   "properties": {
     "summary": { "type": "string", "minLength": 1, "maxLength": 5000 },
     "generatedAt": { "type": "string", "format": "date-time" },
@@ -97,6 +97,62 @@
                 "previousRank": { "type": ["integer", "null"], "minimum": 1, "maximum": 500 },
                 "tier": { "type": ["integer", "null"], "minimum": 1, "maximum": 100 },
                 "insight": { "type": ["string", "null"], "maxLength": 600 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "sleeperReport": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["summary", "positionSummaries", "candidates"],
+      "properties": {
+        "summary": { "type": "string", "minLength": 1, "maxLength": 5000 },
+        "positionSummaries": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["QB", "RB", "WR", "TE"],
+          "properties": {
+            "QB": { "type": "string", "minLength": 1, "maxLength": 1500 },
+            "RB": { "type": "string", "minLength": 1, "maxLength": 1500 },
+            "WR": { "type": "string", "minLength": 1, "maxLength": 1500 },
+            "TE": { "type": "string", "minLength": 1, "maxLength": 1500 }
+          }
+        },
+        "candidates": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 80,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["playerName", "position", "team", "recommendedPickStart", "recommendedPickEnd", "summary", "upside", "risk", "sources"],
+            "properties": {
+              "playerName": { "type": "string", "minLength": 2, "maxLength": 120 },
+              "position": { "type": "string", "enum": ["QB", "RB", "WR", "TE"] },
+              "team": { "type": ["string", "null"], "minLength": 2, "maxLength": 5 },
+              "recommendedPickStart": { "type": "integer", "minimum": 1, "maximum": 500 },
+              "recommendedPickEnd": { "type": "integer", "minimum": 1, "maximum": 500 },
+              "summary": { "type": "string", "minLength": 1, "maxLength": 1500 },
+              "upside": { "type": ["string", "null"], "minLength": 1, "maxLength": 1200 },
+              "risk": { "type": ["string", "null"], "minLength": 1, "maxLength": 1200 },
+              "sources": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 12,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["publisher", "title", "url", "publishedAt", "recommendation"],
+                  "properties": {
+                    "publisher": { "type": "string", "minLength": 1, "maxLength": 120 },
+                    "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+                    "url": { "type": "string", "minLength": 1, "maxLength": 2000, "pattern": "^https?://" },
+                    "publishedAt": { "type": ["string", "null"], "format": "date-time" },
+                    "recommendation": { "type": ["string", "null"], "minLength": 1, "maxLength": 1200 }
+                  }
+                }
               }
             }
           }

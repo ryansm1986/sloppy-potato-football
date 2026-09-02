@@ -58,3 +58,37 @@ describe("multi-source research result", () => {
     }).success).toBe(false);
   });
 });
+
+describe("sleeper research result", () => {
+  it("accepts only HTTP(S) source hyperlinks", () => {
+    const candidate = (position: "QB" | "RB" | "WR" | "TE", url: string) => ({
+      playerName: `${position} Sleeper`,
+      position,
+      team: "BUF",
+      recommendedPickStart: 100,
+      recommendedPickEnd: 112,
+      summary: "A current value case.",
+      upside: null,
+      risk: null,
+      sources: [{
+        publisher: "Publisher",
+        title: "Current sleepers",
+        url,
+        publishedAt: null,
+        recommendation: "Recommended as a sleeper.",
+      }],
+    });
+    const sleeperResult = (url: string) => ({
+      ...baseResult,
+      rankingSnapshots: null,
+      sleeperReport: {
+        summary: "A current sleeper report.",
+        positionSummaries: { QB: "QB values.", RB: "RB values.", WR: "WR values.", TE: "TE values." },
+        candidates: (["QB", "RB", "WR", "TE"] as const).map((position) => candidate(position, url)),
+      },
+    });
+
+    expect(researchResultSchema.safeParse(sleeperResult("https://example.com/sleepers")).success).toBe(true);
+    expect(researchResultSchema.safeParse(sleeperResult("ftp://example.com/sleepers")).success).toBe(false);
+  });
+});

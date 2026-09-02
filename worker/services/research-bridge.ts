@@ -2,12 +2,18 @@ import type { DrizzleD1Database } from "drizzle-orm/d1";
 import { z } from "zod";
 import * as schema from "../db/schema";
 import { createRankingSnapshot, rankingSnapshotInput } from "./ranking-snapshots";
+import {
+  discardUnpublishedSleeperReport,
+  persistSleeperReport,
+  publishSleeperReport,
+  sleeperReportInput,
+} from "./sleeper-reports";
 
 type Database = DrizzleD1Database<typeof schema> & { $client: D1Database };
 
 const safeLabel = z.string().trim().min(1).max(200)
   .regex(/^[A-Za-z0-9 .,'&()/:+\-]+$/, "Use a player, source, or ranking label without instructions");
-const jobType = z.enum(["source_refresh", "player_research", "rankings_research"]);
+const jobType = z.enum(["source_refresh", "player_research", "rankings_research", "sleepers_research"]);
 const scoringFormat = z.enum(["ppr", "half_ppr", "standard"]);
 const rankingType = z.enum(["redraft", "weekly", "rest_of_season", "dynasty", "rookie"]);
 const position = z.enum(["ALL", "QB", "RB", "WR", "TE", "K", "DST"]);
@@ -22,6 +28,8 @@ export const createResearchJobInput = z.object({
   season: z.string().regex(/^20\d{2}$/).optional(),
   week: z.number().int().min(1).max(25).optional(),
   rankingLimit: z.number().int().min(1).max(500).optional(),
+  leagueSize: z.number().int().min(4).max(20).optional(),
+  sleepersPerPosition: z.number().int().min(1).max(20).optional(),
 }).superRefine((value, context) => {
   if (value.type === "player_research" && !value.subject) {
     context.addIssue({ code: "custom", path: ["subject"], message: "Player research requires a subject" });
@@ -29,9 +37,20 @@ export const createResearchJobInput = z.object({
   if (value.type === "source_refresh" && !value.sourceName) {
     context.addIssue({ code: "custom", path: ["sourceName"], message: "Source refresh requires a source name" });
   }
+  if (value.type === "sleepers_research" && (value.scoringFormat !== "ppr" || value.rankingType !== "redraft")) {
+    context.addIssue({
+      code: "custom",
+      path: ["type"],
+      message: "Sleeper research currently supports PPR redraft leagues",
+    });
+  }
 }).transform((value) => ({
   ...value,
-  rankingLimit: value.type === "player_research" ? undefined : value.rankingLimit ?? 100,
+  rankingLimit: value.type === "source_refresh" || value.type === "rankings_research"
+    ? value.rankingLimit ?? 100
+    : undefined,
+  leagueSize: value.type === "sleepers_research" ? value.leagueSize ?? 12 : undefined,
+  sleepersPerPosition: value.type === "sleepers_research" ? value.sleepersPerPosition ?? 8 : undefined,
 }));
 
 export const runnerHeartbeatInput = z.object({
@@ -40,7 +59,7 @@ export const runnerHeartbeatInput = z.object({
   provider: z.enum(["codex", "claude"]),
   version: z.string().trim().max(80).optional(),
   status: z.enum(["idle", "busy", "stopping"]).default("idle"),
-  capabilities: z.array(jobType).max(3).optional().default([]),
+  capabilities: z.array(jobType).max(4).optional().default([]),
 });
 
 export const claimResearchJobInput = z.object({
@@ -89,6 +108,7 @@ export const completeResearchJobInput = z.object({
     insights: z.array(insightInput).max(100).optional().default([]),
     rankingSnapshot: z.unknown().optional(),
     rankingSnapshots: z.unknown().optional(),
+    sleeperReport: z.unknown().optional(),
   }),
 });
 
@@ -173,6 +193,8 @@ function toPublicJob(row: ResearchJobRow) {
     season: input.season ?? null,
     week: input.week ?? null,
     rankingLimit: input.rankingLimit ?? null,
+    leagueSize: input.leagueSize ?? null,
+    sleepersPerPosition: input.sleepersPerPosition ?? null,
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
     startedAt: iso(row.started_at),
@@ -197,6 +219,8 @@ function executionContext(row: ResearchJobRow) {
       return `Research the named NFL fantasy player (${input.subject}) for ${scope}. Summarize current role, material news, risk, and ranking implications with citations.`;
     case "rankings_research":
       return `Research current fantasy-football ranking boards for ${scope}${input.subject ? `, focused on ${input.subject}` : ""}. Find at least three distinct reputable publishers and preserve each publisher as a separately attributed source board so the app can aggregate them. For EACH source return up to the requested Top ${rankingLimit}: exactly ${rankingLimit} contiguous entries when that publisher exposes them, or every verifiable entry available up to ${rankingLimit}. For ALL, use cross-position overall boards rather than quarterback-only or separate positional lists. Cite direct ranking URLs; never synthesize an agent-authored source.`;
+    case "sleepers_research":
+      return `Research current-season PPR redraft sleepers for a ${input.leagueSize ?? 12}-team league. Return up to ${input.sleepersPerPosition ?? 8} evidence-backed candidates for each of QB, RB, WR, and TE. Preserve each independent publisher's direct article URL and recommendation for each player. Recommend an overall-pick range for every candidate; the server derives rounds and ranks candidates by their count of unique recommending source domains.`;
   }
 }
 
@@ -219,6 +243,12 @@ async function findJobRankingSnapshotIds(db: Database, jobId: string) {
      ORDER BY external_run_id`,
   ).bind(singleRunId, multiRunPrefix).all<{ id: string }>();
   return rows.results.map((row) => row.id);
+}
+
+async function findJobSleeperReportId(db: Database, jobId: string) {
+  const row = await db.$client.prepare("SELECT id FROM sleeper_reports WHERE job_id = ?")
+    .bind(jobId).first<{ id: string }>();
+  return row?.id ?? null;
 }
 
 export async function createResearchJob(
@@ -461,7 +491,15 @@ export async function completeResearchJob(db: Database, jobId: string, input: z.
   if (row.status === "completed") {
     if (row.completion_key !== input.resultId) throw new ResearchBridgeError("result_conflict", "This job already has a different result", 409);
     const rankingSnapshotIds = await findJobRankingSnapshotIds(db, jobId);
-    return { job: toPublicJob(row), idempotent: true, rankingSnapshotId: row.ranking_snapshot_id, rankingSnapshotIds };
+    const sleeperReportId = await findJobSleeperReportId(db, jobId);
+    const repairedPublication = sleeperReportId ? await publishSleeperReport(db, sleeperReportId) : false;
+    await db.$client.prepare(
+      "UPDATE research_runners SET status = 'idle', current_job_id = NULL, last_seen_at = ?, updated_at = ? WHERE id = ? AND current_job_id = ?",
+    ).bind(Date.now(), Date.now(), input.runnerId, jobId).run();
+    if (repairedPublication) {
+      await insertEvent(db, jobId, "publication_repaired", "runner", input.runnerId, { sleeperReportId });
+    }
+    return { job: toPublicJob(row), idempotent: true, rankingSnapshotId: row.ranking_snapshot_id, rankingSnapshotIds, sleeperReportId };
   }
   const now = Date.now();
   assertActiveLease(row, input.runnerId, input.leaseToken, now);
@@ -472,6 +510,19 @@ export async function completeResearchJob(db: Database, jobId: string, input: z.
   const provider = runner?.provider === "claude" ? "claude" : "codex";
   const generatedAt = input.result.generatedAt ?? new Date(now).toISOString();
   const snapshotsToCreate: Array<z.infer<typeof rankingSnapshotInput>> = [];
+  const parsedSleeperReport = row.job_type === "sleepers_research"
+    ? sleeperReportInput.parse(input.result.sleeperReport)
+    : null;
+  if (row.job_type === "sleepers_research") {
+    if (input.result.rankingSnapshot !== undefined && input.result.rankingSnapshot !== null) {
+      z.never().parse(input.result.rankingSnapshot);
+    }
+    if (input.result.rankingSnapshots !== undefined && input.result.rankingSnapshots !== null) {
+      z.never().parse(input.result.rankingSnapshots);
+    }
+  } else if (input.result.sleeperReport !== undefined && input.result.sleeperReport !== null) {
+    z.never().parse(input.result.sleeperReport);
+  }
 
   if (input.result.rankingSnapshots !== undefined && input.result.rankingSnapshots !== null) {
     if (row.job_type !== "rankings_research") {
@@ -563,18 +614,58 @@ export async function completeResearchJob(db: Database, jobId: string, input: z.
     rankingSnapshotIds.push(created.id);
   }
   const rankingSnapshotId = rankingSnapshotIds[0] ?? null;
+  let sleeperReportId: string | null = null;
+  if (parsedSleeperReport) {
+    sleeperReportId = await persistSleeperReport(db, {
+      jobId,
+      season: taskInput.season ?? String(new Date(now).getUTCFullYear()),
+      scoringFormat: "ppr",
+      rankingType: "redraft",
+      leagueSize: taskInput.leagueSize ?? 12,
+      sleepersPerPosition: taskInput.sleepersPerPosition ?? 8,
+      generatedAt,
+      report: parsedSleeperReport,
+    });
+  }
   const resultJson = JSON.stringify(input.result);
+  const finalizedAt = Date.now();
   const updated = await db.$client.prepare(
     `UPDATE research_jobs SET status = 'completed', completion_key = ?, result_json = ?,
        ranking_snapshot_id = ?, completed_at = ?, updated_at = ?, lease_expires_at = NULL
-     WHERE id = ? AND status = 'running' AND leased_by_runner_id = ? AND lease_token = ?`,
-  ).bind(input.resultId, resultJson, rankingSnapshotId, now, now, jobId, input.runnerId, input.leaseToken).run();
-  if ((updated.meta.changes ?? 0) === 0) throw new ResearchBridgeError("lease_invalid", "The job lease changed before completion", 409);
+     WHERE id = ? AND status = 'running' AND leased_by_runner_id = ? AND lease_token = ?
+       AND lease_expires_at >= ?`,
+  ).bind(
+    input.resultId,
+    resultJson,
+    rankingSnapshotId,
+    finalizedAt,
+    finalizedAt,
+    jobId,
+    input.runnerId,
+    input.leaseToken,
+    finalizedAt,
+  ).run();
+  if ((updated.meta.changes ?? 0) === 0) {
+    if (sleeperReportId) await discardUnpublishedSleeperReport(db, jobId);
+    throw new ResearchBridgeError("lease_invalid", "The job lease changed before completion", 409);
+  }
+  if (sleeperReportId) await publishSleeperReport(db, sleeperReportId);
   await db.$client.prepare(
     "UPDATE research_runners SET status = 'idle', current_job_id = NULL, last_seen_at = ?, updated_at = ? WHERE id = ? AND current_job_id = ?",
   ).bind(now, now, input.runnerId, jobId).run();
-  await insertEvent(db, jobId, "completed", "runner", input.runnerId, { resultId: input.resultId, rankingSnapshotId, rankingSnapshotIds });
-  return { job: toPublicJob((await findJob(db, jobId))!), idempotent: false, rankingSnapshotId, rankingSnapshotIds };
+  await insertEvent(db, jobId, "completed", "runner", input.runnerId, {
+    resultId: input.resultId,
+    rankingSnapshotId,
+    rankingSnapshotIds,
+    sleeperReportId,
+  });
+  return {
+    job: toPublicJob((await findJob(db, jobId))!),
+    idempotent: false,
+    rankingSnapshotId,
+    rankingSnapshotIds,
+    sleeperReportId,
+  };
 }
 
 export async function failResearchJob(db: Database, jobId: string, input: z.infer<typeof failResearchJobInput>) {

@@ -1,6 +1,6 @@
 export const RESEARCH_OWNER_TOKEN_KEY = "spff:research-owner-token:v1";
 
-export type ResearchJobType = "source_refresh" | "player_research" | "rankings_research";
+export type ResearchJobType = "source_refresh" | "player_research" | "rankings_research" | "sleepers_research";
 export type ResearchJobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type RunnerState = "online" | "busy" | "stale" | "offline";
 
@@ -58,6 +58,8 @@ export type CreateResearchJob = {
   rankingType: "redraft";
   position?: "ALL" | "QB" | "RB" | "WR" | "TE";
   rankingLimit?: number;
+  leagueSize?: number;
+  sleepersPerPosition?: number;
 };
 
 export class ResearchApiError extends Error {

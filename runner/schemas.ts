@@ -1,7 +1,11 @@
 import { z } from "zod";
 
 const boundedText = (maximum: number) => z.string().trim().min(1).max(maximum);
-const jobTypeSchema = z.enum(["source_refresh", "player_research", "rankings_research"]);
+const httpUrlSchema = z.string().url().max(2_000).refine((value) => {
+  const protocol = new URL(value).protocol;
+  return protocol === "http:" || protocol === "https:";
+}, "Source URLs must use HTTP or HTTPS");
+const jobTypeSchema = z.enum(["source_refresh", "player_research", "rankings_research", "sleepers_research"]);
 const scoringFormatSchema = z.enum(["ppr", "half_ppr", "standard"]);
 const rankingTypeSchema = z.enum(["redraft", "weekly", "rest_of_season", "dynasty", "rookie"]);
 const positionSchema = z.enum(["ALL", "QB", "RB", "WR", "TE", "K", "DST"]);
@@ -16,6 +20,8 @@ export const researchJobInputSchema = z.object({
   season: z.string().regex(/^20\d{2}$/).optional(),
   week: z.number().int().min(1).max(25).optional(),
   rankingLimit: z.number().int().min(1).max(500).optional(),
+  leagueSize: z.number().int().min(4).max(20).optional(),
+  sleepersPerPosition: z.number().int().min(1).max(20).optional(),
 }).strict();
 
 export const researchJobSchema = z.object({
@@ -56,6 +62,47 @@ const sourcedRankingSnapshotSchema = rankingSnapshotSchema.extend({
   sourceUrl: z.string().url().max(2_000),
 }).strict();
 
+const sleeperSourceSchema = z.object({
+  publisher: boundedText(120),
+  title: boundedText(300),
+  url: httpUrlSchema,
+  publishedAt: z.string().datetime({ offset: true }).nullable(),
+  recommendation: boundedText(1_200).nullable(),
+}).strict();
+
+const sleeperCandidateSchema = z.object({
+  playerName: boundedText(120),
+  position: z.enum(["QB", "RB", "WR", "TE"]),
+  team: z.string().trim().toUpperCase().min(2).max(5).nullable(),
+  recommendedPickStart: z.number().int().min(1).max(500),
+  recommendedPickEnd: z.number().int().min(1).max(500),
+  summary: boundedText(1_500),
+  upside: boundedText(1_200).nullable(),
+  risk: boundedText(1_200).nullable(),
+  sources: z.array(sleeperSourceSchema).min(1).max(12),
+}).strict().refine(
+  (candidate) => candidate.recommendedPickStart <= candidate.recommendedPickEnd,
+  { path: ["recommendedPickEnd"], message: "Recommended pick ranges must be ordered" },
+);
+
+const sleeperReportSchema = z.object({
+  summary: boundedText(5_000),
+  positionSummaries: z.object({
+    QB: boundedText(1_500),
+    RB: boundedText(1_500),
+    WR: boundedText(1_500),
+    TE: boundedText(1_500),
+  }).strict(),
+  candidates: z.array(sleeperCandidateSchema).min(4).max(80),
+}).strict().superRefine((report, context) => {
+  const positions = new Set(report.candidates.map((candidate) => candidate.position));
+  for (const position of ["QB", "RB", "WR", "TE"] as const) {
+    if (!positions.has(position)) {
+      context.addIssue({ code: "custom", path: ["candidates"], message: `At least one ${position} is required` });
+    }
+  }
+});
+
 export const researchResultSchema = z.object({
   summary: boundedText(5_000),
   generatedAt: z.string().datetime({ offset: true }),
@@ -77,6 +124,7 @@ export const researchResultSchema = z.object({
   // preserve source provenance and calculate its own aggregate. Three to five
   // sources bounds both research cost and result size.
   rankingSnapshots: z.array(sourcedRankingSnapshotSchema).min(3).max(5).nullable().optional(),
+  sleeperReport: sleeperReportSchema.nullable().optional(),
 }).strict().superRefine((result, context) => {
   const snapshots = [
     ...(result.rankingSnapshot ? [{ path: "rankingSnapshot", snapshot: result.rankingSnapshot }] : []),

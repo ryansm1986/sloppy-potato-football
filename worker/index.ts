@@ -45,6 +45,7 @@ import {
   retryResearchJob,
   runnerHeartbeatInput,
 } from "./services/research-bridge";
+import { getLatestSleeperReport } from "./services/sleeper-reports";
 
 type Bindings = {
   DB: D1Database;
@@ -128,6 +129,12 @@ app.get("/api/health", async (context) => {
     database: databaseResult?.ok === 1 ? "connected" : "unavailable",
     timestamp: new Date().toISOString(),
   });
+});
+
+// Reports are safe to share with the small friend group. Only the separate
+// /api/research queue can activate the owner's runner.
+app.get("/api/sleepers/latest", async (context) => {
+  return context.json({ report: await getLatestSleeperReport(database(context)) });
 });
 
 app.post("/api/imports/sleeper", async (context) => {

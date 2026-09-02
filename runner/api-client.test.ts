@@ -25,7 +25,7 @@ describe("RunnerApiClient", () => {
       runnerId: "codex-test",
       provider: "codex",
       status: "idle",
-      capabilities: ["source_refresh", "player_research", "rankings_research"],
+      capabilities: ["source_refresh", "player_research", "rankings_research", "sleepers_research"],
     });
   });
 

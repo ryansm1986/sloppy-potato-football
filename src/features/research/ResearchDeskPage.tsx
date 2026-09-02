@@ -46,6 +46,7 @@ const JOB_TYPE_LABELS: Record<ResearchJobType, string> = {
   source_refresh: "Source refresh",
   player_research: "Player research",
   rankings_research: "Rankings research",
+  sleepers_research: "Sleeper research",
 };
 
 const JOB_STATUS_LABELS: Record<ResearchJobStatus, string> = {

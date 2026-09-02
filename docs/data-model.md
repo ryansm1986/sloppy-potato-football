@@ -122,6 +122,17 @@ Owner routes require `RESEARCH_OWNER_TOKEN`; runner routes require the separate 
 
 The runner sends heartbeats and polls over outbound HTTPS. It executes Codex in a dedicated temporary directory with a read-only sandbox, live web search, user configuration and project rules disabled, a time limit, and a strict output schema. Results are validated locally and again by the Worker. For ranking results, the Worker ignores runner-supplied canonical IDs, derives the canonical source from the protected job and registered provider, and forces `external_run_id` to the research job ID so completion retries are idempotent.
 
+`sleepers_research` jobs persist shareable results separately from the owner-only queue:
+
+```text
+sleeper_reports
+├── sleeper_position_summaries
+└── sleeper_candidates
+    └── sleeper_candidate_sources
+```
+
+The Worker deduplicates candidate evidence by publisher and source domain, derives the recommendation count and per-position order, and converts overall pick ranges into rounds using the report's league size. Normalized child rows are written in bounded D1 batches while the parent remains unpublished, so a partial retry is never exposed. `GET /api/sleepers/latest` is public for friend-group viewing; creating or retrying the underlying research job still requires the owner token.
+
 Bridge routes:
 
 - `POST /api/research/jobs`, `GET /api/research/jobs`, `GET /api/research/jobs/:jobId`, and `POST /api/research/jobs/:jobId/retry`
