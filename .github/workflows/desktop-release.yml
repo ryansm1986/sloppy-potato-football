@@ -57,7 +57,18 @@ jobs:
           $installer = $installers[0]
           $blockMap = Get-Item -LiteralPath ($installer.FullName + '.blockmap')
           $metadata = Get-Item -LiteralPath 'release-desktop\latest.yml'
-          gh release create "${{ github.ref_name }}" $installer.FullName $blockMap.FullName $metadata.FullName --title "Sloppy Potato Fantasy Football $packageVersion" --generate-notes --verify-tag
+
+          $safeInstallerPath = Join-Path $installer.DirectoryName ($installer.Name -replace ' ', '-')
+          $safeBlockMapPath = $safeInstallerPath + '.blockmap'
+          Move-Item -LiteralPath $installer.FullName -Destination $safeInstallerPath
+          Move-Item -LiteralPath $blockMap.FullName -Destination $safeBlockMapPath
+
+          $safeInstaller = Get-Item -LiteralPath $safeInstallerPath
+          $safeBlockMap = Get-Item -LiteralPath $safeBlockMapPath
+          $metadataText = Get-Content -LiteralPath $metadata.FullName -Raw
+          if (-not $metadataText.Contains($safeInstaller.Name)) { throw "Updater metadata does not reference $($safeInstaller.Name)." }
+
+          gh release create "${{ github.ref_name }}" $safeInstaller.FullName $safeBlockMap.FullName $metadata.FullName --title "Sloppy Potato Fantasy Football $packageVersion" --generate-notes --verify-tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
