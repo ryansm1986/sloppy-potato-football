@@ -105,12 +105,11 @@ type MutableAggregate = {
 };
 
 export function aggregateRankingSnapshots(snapshots: AgentRankingSnapshot[]): RankingAggregate | null {
-  const latest = selectLatestSnapshotPerSource(snapshots);
-  const anchor = latest[0];
+  const anchor = [...snapshots].sort(compareNewest)[0];
   if (!anchor) return null;
 
   const scope = rankingScopeOf(anchor);
-  const compatible = latest.filter((snapshot) => isSnapshotInScope(snapshot, scope));
+  const compatible = selectLatestSnapshotPerSource(snapshots.filter((snapshot) => isSnapshotInScope(snapshot, scope)));
   const external = compatible.filter((snapshot) => snapshot.source.kind === "external");
   const usesAllAvailableSources = external.length < 2;
   const sourceSnapshots = (usesAllAvailableSources ? compatible : external).sort(compareNewest);
@@ -157,7 +156,7 @@ export function aggregateRankingSnapshots(snapshots: AgentRankingSnapshot[]): Ra
         sourceId: snapshot.source.id,
         canonicalKey: snapshot.source.canonicalKey,
         sourceName: snapshot.source.name,
-        attributionUrl: snapshot.source.attributionUrl ?? null,
+        attributionUrl: snapshot.sourceUrl ?? snapshot.source.attributionUrl ?? null,
         snapshotId: snapshot.id,
         generatedAt: snapshot.generatedAt,
         rank: entry.rank,

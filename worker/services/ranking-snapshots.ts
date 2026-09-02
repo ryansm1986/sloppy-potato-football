@@ -11,6 +11,7 @@ import {
   rankingSourceRegistryInput,
   resolveOrCreateRankingSource,
 } from "./ranking-sources";
+import { canonicalSourceDomain } from "./source-domains";
 
 type Database = DrizzleD1Database<typeof schema> & { $client: D1Database };
 
@@ -73,6 +74,13 @@ export const rankingSnapshotInput = z.object({
 
 export type RankingSnapshotInput = z.infer<typeof rankingSnapshotInput>;
 
+export type RankingSnapshotDiscovery = {
+  researchJobId: string;
+  discoverNewSources: boolean;
+  isNewDiscovery: boolean;
+  newPublisherCount: number;
+};
+
 export class RankingSnapshotError extends Error {
   constructor(readonly code: "unknown_player" | "snapshot_conflict", message: string) {
     super(message);
@@ -80,7 +88,11 @@ export class RankingSnapshotError extends Error {
   }
 }
 
-export async function createRankingSnapshot(db: Database, input: RankingSnapshotInput) {
+export async function createRankingSnapshot(
+  db: Database,
+  input: RankingSnapshotInput,
+  discovery?: RankingSnapshotDiscovery,
+) {
   const registryInput = rankingSourceRegistryInput.parse({
     canonicalKey: input.source.canonicalKey ?? input.source.slug,
     slug: input.source.slug,
@@ -139,8 +151,9 @@ export async function createRankingSnapshot(db: Database, input: RankingSnapshot
     db.$client.prepare(
       `INSERT INTO ranking_snapshots (
          id, source_id, external_run_id, title, scoring_format, ranking_type, season,
-         week, position_scope, status, generated_at, summary, methodology, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?)`,
+         week, position_scope, status, generated_at, summary, methodology, research_job_id,
+         source_url, discover_new_sources, is_new_discovery, new_publisher_count, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(
       snapshotId,
       sourceId,
@@ -151,9 +164,15 @@ export async function createRankingSnapshot(db: Database, input: RankingSnapshot
       input.season,
       input.week ?? null,
       input.positionScope,
+      discovery ? "pending" : "completed",
       new Date(input.generatedAt).getTime(),
       input.summary ?? null,
       input.methodology ?? null,
+      discovery?.researchJobId ?? null,
+      input.source.attributionUrl ?? null,
+      discovery?.discoverNewSources ? 1 : 0,
+      discovery?.isNewDiscovery ? 1 : 0,
+      discovery?.newPublisherCount ?? 0,
       now,
     ),
     db.$client.prepare(
@@ -171,6 +190,94 @@ export async function createRankingSnapshot(db: Database, input: RankingSnapshot
     ).bind(JSON.stringify(entryRows)),
   ]);
   return { id: snapshotId, created: true };
+}
+
+type RankingDomainRow = {
+  attribution_url: string | null;
+  snapshot_source_url: string | null;
+  alias_domain: string | null;
+  latest_snapshot_at: number;
+};
+
+async function loadRankingDomainRows(db: Database, limit?: number) {
+  const limitSql = limit === undefined ? "" : " LIMIT ?";
+  const statement = db.$client.prepare(
+    `SELECT sources.attribution_url, snapshots.source_url AS snapshot_source_url,
+       aliases.normalized_value AS alias_domain,
+       MAX(snapshots.created_at) AS latest_snapshot_at
+     FROM ranking_sources sources
+     JOIN ranking_snapshots snapshots ON snapshots.source_id = sources.id
+       AND snapshots.status = 'completed'
+     LEFT JOIN ranking_source_aliases aliases ON aliases.source_id = sources.id
+       AND aliases.alias_type = 'domain'
+     WHERE sources.kind = 'external'
+     GROUP BY sources.id, sources.attribution_url, snapshots.source_url, aliases.normalized_value
+     ORDER BY latest_snapshot_at DESC, sources.id${limitSql}`,
+  );
+  return limit === undefined
+    ? (await statement.all<RankingDomainRow>()).results
+    : (await statement.bind(limit).all<RankingDomainRow>()).results;
+}
+
+function domainsFromRankingRows(rows: RankingDomainRow[]) {
+  const domains = new Set<string>();
+  for (const row of rows) {
+    if (row.alias_domain) {
+      try {
+        domains.add(canonicalSourceDomain(`https://${row.alias_domain}`));
+      } catch {
+        // Ignore malformed legacy aliases; a valid attribution URL can still
+        // preserve the source's history below.
+      }
+    }
+    if (row.attribution_url) {
+      try {
+        domains.add(canonicalSourceDomain(row.attribution_url));
+      } catch {
+        // Ignore malformed legacy URLs rather than blocking a research job.
+      }
+    }
+    if (row.snapshot_source_url) {
+      try {
+        domains.add(canonicalSourceDomain(row.snapshot_source_url));
+      } catch {
+        // Ignore malformed legacy snapshot URLs.
+      }
+    }
+  }
+  return [...domains];
+}
+
+export async function snapshotKnownRankingSourceDomains(db: Database) {
+  // Fetch extra rows before applying the stricter prompt budgets because one
+  // source can have multiple historical domain aliases.
+  const candidates = domainsFromRankingRows(await loadRankingDomainRows(db, 100));
+  const domains: string[] = [];
+  let characterCount = 0;
+  for (const domain of candidates) {
+    if (!domain || domain.length > 253 || characterCount + domain.length > 1_200) continue;
+    domains.push(domain);
+    characterCount += domain.length;
+    if (domains.length === 40) break;
+  }
+  return domains;
+}
+
+export async function loadAllKnownRankingSourceDomains(db: Database) {
+  return domainsFromRankingRows(await loadRankingDomainRows(db));
+}
+
+export async function publishRankingSnapshots(db: Database, researchJobId: string) {
+  const result = await db.$client.prepare(
+    "UPDATE ranking_snapshots SET status = 'completed' WHERE research_job_id = ? AND status = 'pending'",
+  ).bind(researchJobId).run();
+  return result.meta.changes ?? 0;
+}
+
+export async function discardPendingRankingSnapshots(db: Database, researchJobId: string) {
+  await db.$client.prepare(
+    "DELETE FROM ranking_snapshots WHERE research_job_id = ? AND status = 'pending'",
+  ).bind(researchJobId).run();
 }
 
 export const rankingSnapshotQueryInput = z.object({
@@ -244,6 +351,11 @@ export async function getRankingSnapshots(db: Database, limit: number, query: Ra
       createdAt: rankingSnapshots.createdAt,
       summary: rankingSnapshots.summary,
       methodology: rankingSnapshots.methodology,
+      researchJobId: rankingSnapshots.researchJobId,
+      sourceUrl: rankingSnapshots.sourceUrl,
+      discoverNewSources: rankingSnapshots.discoverNewSources,
+      isNewDiscovery: rankingSnapshots.isNewDiscovery,
+      newPublisherCount: rankingSnapshots.newPublisherCount,
     })
     .from(rankingSnapshots)
     .innerJoin(rankingSources, eq(rankingSources.id, rankingSnapshots.sourceId))
@@ -287,6 +399,11 @@ export async function getRankingSnapshots(db: Database, limit: number, query: Ra
     savedAt: snapshot.createdAt,
     summary: snapshot.summary,
     methodology: snapshot.methodology,
+    researchJobId: snapshot.researchJobId,
+    sourceUrl: snapshot.sourceUrl ?? snapshot.sourceAttributionUrl,
+    discoverNewSources: snapshot.discoverNewSources,
+    isNewDiscovery: snapshot.isNewDiscovery,
+    newPublisherCount: snapshot.newPublisherCount,
     entries: (entriesBySnapshot.get(snapshot.id) ?? []).map((entry) => ({
       id: entry.id,
       playerId: entry.playerId,

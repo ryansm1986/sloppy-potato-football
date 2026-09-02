@@ -1,6 +1,7 @@
 import type { DrizzleD1Database } from "drizzle-orm/d1";
 import { z } from "zod";
 import * as schema from "../db/schema";
+import { canonicalSourceDomain } from "./source-domains";
 
 type Database = DrizzleD1Database<typeof schema> & { $client: D1Database };
 
@@ -14,6 +15,10 @@ const aliasInput = z.object({
   type: z.enum(["slug", "name", "url", "domain", "external", "custom"]),
   value: z.string().trim().min(1).max(500),
 });
+const httpAttributionUrl = z.string().url().max(500).refine((value) => {
+  const protocol = new URL(value).protocol;
+  return protocol === "http:" || protocol === "https:";
+}, "Attribution URLs must use HTTP or HTTPS");
 
 export const rankingSourceRegistryInput = z.object({
   canonicalKey,
@@ -21,7 +26,7 @@ export const rankingSourceRegistryInput = z.object({
   name: z.string().trim().min(2).max(100),
   kind: z.enum(["agent", "import", "derived", "external", "custom"]),
   provider: z.string().trim().max(50).nullish(),
-  attributionUrl: z.string().url().max(500).nullish(),
+  attributionUrl: httpAttributionUrl.nullish(),
   aliases: z.array(aliasInput).max(50).optional().default([]),
   refresh: z.object({
     mode: z.enum(["manual", "agent", "import"]).default("manual"),
@@ -62,7 +67,8 @@ function normalizeAlias(type: NormalizedAlias["type"], value: string): string {
   const normalized = value.trim().normalize("NFKC");
   if (type === "url") return normalizeUrl(normalized);
   if (type === "domain") {
-    return normalized.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/$/, "");
+    const hostname = normalized.toLowerCase().replace(/^https?:\/\//, "").split("/")[0];
+    return canonicalSourceDomain(`https://${hostname}`);
   }
   return normalized.toLowerCase().replace(/\s+/g, " ");
 }
@@ -144,7 +150,34 @@ async function findMatchingSourceIds(
          AND json_extract(candidate.value, '$.normalizedValue') = normalized_value
      )`,
   ).bind(input.canonicalKey, input.slug, JSON.stringify(aliases)).all<{ id: string }>();
-  return matches.results.map((row) => row.id);
+  const matchingIds = new Set(matches.results.map((row) => row.id));
+  const candidateDomains = new Set(aliases
+    .filter((alias) => alias.type === "domain")
+    .map((alias) => alias.normalizedValue));
+  if (candidateDomains.size > 0) {
+    // Domain aliases written before registrable-domain normalization may hold
+    // a subdomain. Compare those aliases and legacy attribution URLs through
+    // the same canonicalizer so a renamed publisher cannot split identity.
+    const legacyRows = await db.$client.prepare(
+      `SELECT sources.id, sources.attribution_url, aliases.normalized_value AS alias_domain
+       FROM ranking_sources sources
+       LEFT JOIN ranking_source_aliases aliases ON aliases.source_id = sources.id
+         AND aliases.alias_type = 'domain'`,
+    ).all<{ id: string; attribution_url: string | null; alias_domain: string | null }>();
+    for (const row of legacyRows.results) {
+      const values = [
+        row.alias_domain ? `https://${row.alias_domain}` : null,
+        row.attribution_url,
+      ];
+      if (values.some((value) => {
+        if (!value) return false;
+        try { return candidateDomains.has(canonicalSourceDomain(value)); } catch { return false; }
+      })) {
+        matchingIds.add(row.id);
+      }
+    }
+  }
+  return [...matchingIds];
 }
 
 async function loadSource(db: Database, sourceId: string) {

@@ -56,6 +56,22 @@ describe("multi-source research result", () => {
         source("CBS Sports", "https://www.cbssports.com/fantasy/football/rankings/"),
       ],
     }).success).toBe(false);
+    expect(researchResultSchema.safeParse({
+      ...baseResult,
+      rankingSnapshots: [
+        source("FantasyPros", "https://rankings.fantasypros.com/nfl/ppr"),
+        source("FantasyPros Staff", "https://www.fantasypros.com/nfl/rankings/ppr-cheatsheets.php"),
+        source("CBS Sports", "https://www.cbssports.com/fantasy/football/rankings/"),
+      ],
+    }).success).toBe(false);
+    expect(researchResultSchema.safeParse({
+      ...baseResult,
+      rankingSnapshots: [
+        source("FantasyPros", "ftp://fantasypros.com/rankings"),
+        source("RotoWire", "https://www.rotowire.com/football/rankings.php"),
+        source("CBS Sports", "https://www.cbssports.com/fantasy/football/rankings/"),
+      ],
+    }).success).toBe(false);
   });
 });
 

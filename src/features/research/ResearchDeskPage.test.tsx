@@ -168,6 +168,7 @@ describe("ResearchDeskPage", () => {
     render(<MemoryRouter><ResearchDeskPage localDevelopmentOverride={false} /></MemoryRouter>);
 
     fireEvent.click(screen.getByLabelText("Rankings research"));
+    expect(screen.getByRole("checkbox", { name: /Scout new publishers/i })).toBeChecked();
     const limit = screen.getByLabelText("Number of players");
     expect(limit).toHaveValue(100);
     fireEvent.change(limit, { target: { value: "500" } });
@@ -179,10 +180,32 @@ describe("ResearchDeskPage", () => {
       type: "rankings_research",
       position: "ALL",
       rankingLimit: 500,
+      discoverNewSources: true,
     });
 
     fireEvent.change(limit, { target: { value: "501" } });
     expect(screen.getByRole("button", { name: /queue research/i })).toBeDisabled();
+  });
+
+  it("allows ranking research to opt out of scouting new publishers", async () => {
+    window.localStorage.setItem(RESEARCH_OWNER_TOKEN_KEY, "owner-secret");
+    const fetchMock = mockBridge();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<MemoryRouter><ResearchDeskPage localDevelopmentOverride={false} /></MemoryRouter>);
+
+    fireEvent.click(screen.getByLabelText("Rankings research"));
+    fireEvent.click(screen.getByRole("checkbox", { name: /Scout new publishers/i }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /queue research/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: /queue research/i }));
+
+    await waitFor(() => {
+      const createCall = fetchMock.mock.calls.find(([url, init]) => url === "/api/research/jobs" && init?.method === "POST");
+      expect(createCall).toBeDefined();
+      expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
+        type: "rankings_research",
+        discoverNewSources: false,
+      });
+    });
   });
 
   it("shows runner state and retries a failed cloud job", async () => {

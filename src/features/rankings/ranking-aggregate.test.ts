@@ -24,6 +24,7 @@ function makeSnapshot(id: string, overrides: SnapshotOverrides = {}): AgentRanki
     rankingType: overrides.rankingType ?? "redraft",
     season: overrides.season ?? "2026",
     week: overrides.week === undefined ? null : overrides.week,
+    positionScope: overrides.positionScope,
     generatedAt: overrides.generatedAt ?? "2026-09-01T12:00:00.000Z",
     createdAt: overrides.createdAt,
     savedAt: overrides.savedAt,
@@ -79,6 +80,30 @@ describe("ranking aggregation", () => {
     const result = aggregateRankingSnapshots([wrongScoring, wrongType, wrongSeason, wrongWeek, compatible, anchor]);
     expect(result?.sourceSnapshots.map((snapshot) => snapshot.id)).toEqual(["anchor", "compatible"]);
     expect(result?.scope).toEqual({ scoringFormat: "ppr", rankingType: "redraft", season: "2026", week: 2, positionScope: "ALL" });
+  });
+
+  it("keeps a source's compatible overall board when it also has a newer position-only board", () => {
+    const sourceAOverall = makeSnapshot("a-overall", {
+      source: { canonicalKey: "expert:a" },
+      generatedAt: "2026-09-01T12:00:00Z",
+      positionScope: "ALL",
+    });
+    const sourceAQuarterbacks = makeSnapshot("a-qb", {
+      source: { canonicalKey: "expert:a" },
+      generatedAt: "2026-09-01T13:00:00Z",
+      positionScope: "QB",
+      entries: [{ playerName: "Quarterback", position: "QB" }],
+    });
+    const sourceBOverall = makeSnapshot("b-overall", {
+      source: { canonicalKey: "expert:b" },
+      generatedAt: "2026-09-01T14:00:00Z",
+      positionScope: "ALL",
+    });
+
+    const result = aggregateRankingSnapshots([sourceAOverall, sourceAQuarterbacks, sourceBOverall]);
+
+    expect(result?.scope.positionScope).toBe("ALL");
+    expect(result?.sourceSnapshots.map((snapshot) => snapshot.id)).toEqual(["b-overall", "a-overall"]);
   });
 
   it("uses external expert sources without double-counting agent syntheses", () => {

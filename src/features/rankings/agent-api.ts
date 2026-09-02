@@ -21,11 +21,16 @@ export type AgentRankingSnapshot = {
   season: string;
   week: number | null;
   positionScope?: string;
+  sourceUrl?: string | null;
   generatedAt: string;
   createdAt?: string;
   savedAt?: string;
   summary: string | null;
   methodology: string | null;
+  researchJobId?: string | null;
+  isNewDiscovery?: boolean;
+  discoverNewSources?: boolean;
+  newPublisherCount?: number;
   entries: AgentRankingEntry[];
 };
 

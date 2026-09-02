@@ -16,6 +16,7 @@ import {
   ShieldCheck,
   Sparkles,
   Star,
+  Telescope,
   Trash2,
   Wifi,
   WifiOff,
@@ -107,6 +108,9 @@ function SnapshotResult({ snapshot }: { snapshot: AgentRankingSnapshot }) {
         </div>
         <footer>
           <span><Bot size={13} /> {snapshot.source.name}</span>
+          {snapshot.discoverNewSources && (
+            <span className="ranking-discovery-count"><Telescope size={13} /> Latest scout: {snapshot.newPublisherCount ? `${snapshot.newPublisherCount} new ${snapshot.newPublisherCount === 1 ? "publisher" : "publishers"}` : "no new publishers"}</span>
+          )}
           <span><Clock3 size={13} /> {new Date(snapshot.generatedAt).toLocaleString()}</span>
           <a href="/rankings">Review rankings <ExternalLink size={13} /></a>
         </footer>
@@ -129,6 +133,7 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
   const [source, setSource] = useState(favoriteSource);
   const [position, setPosition] = useState<"ALL" | "QB" | "RB" | "WR" | "TE">("ALL");
   const [rankingLimit, setRankingLimit] = useState(100);
+  const [discoverNewSources, setDiscoverNewSources] = useState(true);
   const [jobs, setJobs] = useState<ResearchJob[]>([]);
   const [runner, setRunner] = useState<RunnerStatus | null>(null);
   const [snapshots, setSnapshots] = useState<AgentRankingSnapshot[]>([]);
@@ -231,6 +236,7 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
         ...(jobType === "player_research" ? { subject: subject.trim() } : {}),
         ...(jobType === "source_refresh" ? { sourceName: source.trim() } : {}),
         ...(jobType === "rankings_research" ? { position } : {}),
+        ...(jobType === "rankings_research" ? { discoverNewSources } : {}),
         ...(jobType !== "player_research" ? { rankingLimit } : {}),
       });
       setJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]);
@@ -327,6 +333,16 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
                     onChange={(event) => setRankingLimit(Number(event.target.value))}
                   />
                   <small>Request a Top N list from 1–500. Larger lists take longer and depend on how much of the named source is publicly verifiable.</small>
+                </label>
+              )}
+              {jobType === "rankings_research" && (
+                <label className="source-scout-toggle">
+                  <input type="checkbox" checked={discoverNewSources} onChange={(event) => setDiscoverNewSources(event.target.checked)} />
+                  <span className="source-scout-toggle__control" aria-hidden="true"><i /></span>
+                  <span>
+                    <strong>Scout new publishers</strong>
+                    <small>Try reputable ranking publishers outside prior reports while retaining strong known sources.</small>
+                  </span>
                 </label>
               )}
 

@@ -60,6 +60,29 @@ describe("buildResearchPrompt", () => {
     expect(prompt.length).toBeLessThanOrEqual(8_000);
   });
 
+  it("directs an enabled rankings run to scout outside the server domain snapshot", () => {
+    const prompt = buildResearchPrompt({
+      ...job,
+      type: "rankings_research",
+      input: {
+        type: "rankings_research",
+        scoringFormat: "ppr",
+        rankingType: "redraft",
+        position: "ALL",
+        season: "2026",
+        rankingLimit: 100,
+        discoverNewSources: true,
+        knownSourceDomains: ["fantasypros.com", "espn.com"],
+      },
+      executionContext: "Scout ranking publishers beyond the known source set.",
+    });
+
+    expect(prompt).toContain("Ranking source discovery: enabled");
+    expect(prompt).toContain("fantasypros.com, espn.com");
+    expect(prompt).toContain("at least two credible current-season ranking publisher domains");
+    expect(prompt).toContain("strongest established sources instead");
+  });
+
   it("bounds sleeper research and leaves ranking and round derivation to the server", () => {
     const prompt = buildResearchPrompt({
       ...job,

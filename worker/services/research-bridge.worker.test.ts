@@ -405,6 +405,203 @@ describe("research runner bridge", () => {
     expect(retried.rankingSnapshotIds).toEqual(completed.rankingSnapshotIds);
   });
 
+  it("scouts new ranking publishers without client-spoofed history or false-new labels", async () => {
+    const suffix = crypto.randomUUID();
+    const runnerId = `ranking-scout-${suffix}`;
+    const now = Date.now();
+    const historical = Array.from({ length: 45 }, (_value, index) => ({
+      sourceId: `ranking-scout-source-${suffix}-${index}`,
+      snapshotId: `ranking-scout-snapshot-${suffix}-${index}`,
+      domain: `${suffix}-known-${index}.example`,
+      createdAt: index === 44 ? now - 1_000_000_000 : now - index,
+    }));
+    await env.DB.batch(historical.flatMap((item, index) => [
+      env.DB.prepare(
+        `INSERT INTO ranking_sources
+         (id, canonical_key, slug, name, kind, attribution_url, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'external', ?, ?, ?)`,
+      ).bind(
+        item.sourceId,
+        `external:ranking-scout-${suffix}-${index}`,
+        `ranking-scout-${suffix}-${index}`,
+        `Ranking Scout Known ${index}`,
+        `https://${item.domain}/rankings`,
+        item.createdAt,
+        item.createdAt,
+      ),
+      env.DB.prepare(
+        `INSERT INTO ranking_snapshots
+         (id, source_id, external_run_id, title, scoring_format, ranking_type, season,
+          week, position_scope, status, generated_at, created_at)
+         VALUES (?, ?, ?, ?, 'ppr', 'redraft', '2096', NULL, 'ALL', 'completed', ?, ?)`,
+      ).bind(
+        item.snapshotId,
+        item.sourceId,
+        `ranking-scout-history-${suffix}-${index}`,
+        `Historical board ${index}`,
+        item.createdAt,
+        item.createdAt,
+      ),
+    ]));
+    await heartbeat(runnerId);
+
+    const create = await app.request(
+      "https://potato.example/api/research/jobs",
+      jsonRequest("POST", {
+        type: "rankings_research",
+        scoringFormat: "ppr",
+        rankingType: "redraft",
+        position: "ALL",
+        season: "2097",
+        rankingLimit: 100,
+        discoverNewSources: true,
+        knownSourceDomains: ["spoofed.example"],
+      }, "owner-secret", { "Idempotency-Key": `ranking-scout-${suffix}` }),
+      sharedBindings,
+    );
+    expect(create.status).toBe(201);
+    const created = await create.json<{ job: {
+      id: string; discoverNewSources: boolean; newPublisherCount: number;
+    } }>();
+    expect(created.job.discoverNewSources).toBe(true);
+    expect(created.job.newPublisherCount).toBe(0);
+    expect(created.job).not.toHaveProperty("knownSourceDomains");
+
+    const claim = await app.request(
+      "https://potato.example/api/runners/jobs/claim",
+      jsonRequest("POST", { runnerId }, "runner-secret"),
+      sharedBindings,
+    );
+    const claimed = (await claim.json<{ job: {
+      leaseToken: string;
+      input: { discoverNewSources: boolean; knownSourceDomains: string[] };
+      executionContext: string;
+    } }>()).job;
+    expect(claimed.input.discoverNewSources).toBe(true);
+    expect(claimed.input.knownSourceDomains).toContain(historical[0].domain);
+    expect(claimed.input.knownSourceDomains).not.toContain(historical[44].domain);
+    expect(claimed.input.knownSourceDomains).not.toContain("spoofed.example");
+    expect(claimed.input.knownSourceDomains.length).toBeLessThanOrEqual(40);
+    expect(claimed.executionContext).toContain("Try to include at least two credible current-season ranking publisher domains");
+
+    const freshOne = `${suffix}-fresh-one.example`;
+    const freshTwo = `${suffix}-fresh-two.example`;
+    const entries = [
+      { playerName: "Bijan Robinson", position: "RB", team: "ATL", rank: 1 },
+      { playerName: "Ja'Marr Chase", position: "WR", team: "CIN", rank: 2 },
+      { playerName: "Josh Allen", position: "QB", team: "BUF", rank: 3 },
+    ];
+    const sourceBoards = [
+      { sourceName: `Known Recent ${suffix}`, sourceUrl: `https://${historical[0].domain}/rankings` },
+      { sourceName: `Known Overflow ${suffix}`, sourceUrl: `https://${historical[44].domain}/rankings` },
+      { sourceName: `Fresh One ${suffix}`, sourceUrl: `https://${freshOne}/rankings` },
+      { sourceName: `Fresh Two ${suffix}`, sourceUrl: `https://${freshTwo}/rankings` },
+    ].map((source) => ({
+      ...source,
+      title: `${source.sourceName} rankings`,
+      scoringFormat: "ppr",
+      rankingType: "redraft",
+      season: "2097",
+      week: null,
+      summary: null,
+      methodology: null,
+      entries,
+    }));
+    const complete = await app.request(
+      `https://potato.example/api/runners/jobs/${created.job.id}/result`,
+      jsonRequest("POST", {
+        runnerId,
+        leaseToken: claimed.leaseToken,
+        resultId: `ranking-scout-result-${suffix}`,
+        result: {
+          summary: "Collected known and newly discovered published boards.",
+          generatedAt: "2097-09-01T20:00:00.000Z",
+          citations: sourceBoards.map((board) => ({ title: board.sourceName, url: board.sourceUrl })),
+          rankingSnapshot: null,
+          rankingSnapshots: sourceBoards,
+        },
+      }, "runner-secret"),
+      sharedBindings,
+    );
+    expect(complete.status).toBe(200);
+    const completed = await complete.json<{ job: { newPublisherCount: number }; rankingSnapshotIds: string[] }>();
+    expect(completed.job.newPublisherCount).toBe(2);
+
+    const snapshotsResponse = await app.request(
+      "https://potato.example/api/rankings/snapshots?scoringFormat=ppr&rankingType=redraft&season=2097&week=null&position=ALL&limit=20",
+      { headers: { Accept: "application/json" } },
+      sharedBindings,
+    );
+    const snapshots = (await snapshotsResponse.json<{ snapshots: Array<{
+      id: string;
+      researchJobId: string | null;
+      sourceUrl: string | null;
+      discoverNewSources: boolean;
+      isNewDiscovery: boolean;
+      newPublisherCount: number;
+    }> }>()).snapshots.filter((snapshot) => snapshot.researchJobId === created.job.id);
+    expect(snapshots).toHaveLength(4);
+    expect(snapshots.every((snapshot) => snapshot.discoverNewSources && snapshot.newPublisherCount === 2)).toBe(true);
+    expect(snapshots.filter((snapshot) => snapshot.isNewDiscovery).map((snapshot) => snapshot.sourceUrl).sort())
+      .toEqual([`https://${freshOne}/rankings`, `https://${freshTwo}/rankings`].sort());
+    expect(snapshots.find((snapshot) => snapshot.sourceUrl?.includes(historical[44].domain))?.isNewDiscovery).toBe(false);
+
+    const statuses = await env.DB.prepare(
+      "SELECT DISTINCT status FROM ranking_snapshots WHERE research_job_id = ?",
+    ).bind(created.job.id).all<{ status: string }>();
+    expect(statuses.results.map((row) => row.status)).toEqual(["completed"]);
+  });
+
+  it("discards pending ranking snapshots when a runner records failure", async () => {
+    const suffix = crypto.randomUUID();
+    const runnerId = `pending-cleanup-${suffix}`;
+    await heartbeat(runnerId);
+    const create = await app.request(
+      "https://potato.example/api/research/jobs",
+      jsonRequest("POST", { type: "rankings_research", season: "2098" }, "owner-secret", {
+        "Idempotency-Key": `pending-cleanup-${suffix}`,
+      }),
+      sharedBindings,
+    );
+    const jobId = (await create.json<{ job: { id: string } }>()).job.id;
+    const claim = await app.request(
+      "https://potato.example/api/runners/jobs/claim",
+      jsonRequest("POST", { runnerId }, "runner-secret"),
+      sharedBindings,
+    );
+    const leaseToken = (await claim.json<{ job: { leaseToken: string } }>()).job.leaseToken;
+    const sourceId = `pending-source-${suffix}`;
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO ranking_sources
+         (id, canonical_key, slug, name, kind, attribution_url, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'external', ?, ?, ?)`,
+      ).bind(sourceId, `external:pending-${suffix}`, `pending-${suffix}`, `Pending ${suffix}`,
+        `https://${suffix}-pending.example/rankings`, Date.now(), Date.now()),
+      env.DB.prepare(
+        `INSERT INTO ranking_snapshots
+         (id, source_id, external_run_id, title, scoring_format, ranking_type, season,
+          position_scope, status, generated_at, research_job_id, created_at)
+         VALUES (?, ?, ?, 'Pending board', 'ppr', 'redraft', '2098', 'ALL', 'pending', ?, ?, ?)`,
+      ).bind(`pending-snapshot-${suffix}`, sourceId, `research-job:${jobId}:1`, Date.now(), jobId, Date.now()),
+    ]);
+
+    const failure = await app.request(
+      `https://potato.example/api/runners/jobs/${jobId}/fail`,
+      jsonRequest("POST", {
+        runnerId,
+        leaseToken,
+        error: { code: "test_failure", message: "Stop the partial attempt", retryable: false },
+      }, "runner-secret"),
+      sharedBindings,
+    );
+    expect(failure.status).toBe(200);
+    const remaining = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM ranking_snapshots WHERE research_job_id = ?",
+    ).bind(jobId).first<{ count: number }>();
+    expect(remaining?.count).toBe(0);
+  });
+
   it("requeues retryable runner failures and allows an owner to retry terminal failures", async () => {
     const suffix = crypto.randomUUID();
     const runnerId = `failure-${suffix}`;

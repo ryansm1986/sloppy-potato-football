@@ -25,6 +25,7 @@ export function buildResearchPrompt(job: ResearchJob): string {
     "Preserve each publisher's own player order exactly, use its direct rankings page URL, and do not merge sources. The app computes the aggregate after ingestion.",
     "If the requested position is ALL, each source must be an overall/flex-style board spanning multiple positions with one contiguous cross-position rank order. ALL never means a quarterback-only list or separate per-position rank sequences.",
     "Every returned ranking board must use ranks that are unique and contiguous from 1. If fewer than 3 qualifying published sources can be verified, return no ranking boards and explain the insufficient evidence rather than fabricating data.",
+    "When ranking source discovery is enabled, try to include at least two credible current-season ranking publisher domains that are absent from the server-provided known-domain snapshot. Use direct published ranking-board URLs. If two qualifying new publishers cannot be verified, use the strongest established sources instead and say so in the summary.",
     "For sleepers_research, set rankingSnapshot and rankingSnapshots to null and return sleeperReport. Cover QB, RB, WR, and TE separately, with no more than the requested number of candidates per position.",
     "A sleeper source counts only when its current-season article or rankings page actually recommends, identifies, or positively targets that specific player as a sleeper or draft value. Give its direct URL and concise recommendation; do not cite search pages, homepages, copied aggregators, or synthetic agent opinions.",
     "Use at least three independent reputable publisher domains across the sleeper report. Do not repeat the same publisher domain for a player. The server deduplicates by domain and ranks each position by independent recommendation count.",
@@ -42,6 +43,12 @@ export function buildResearchPrompt(job: ResearchJob): string {
       `Sleeper source discovery: ${input.discoverNewSources ? "enabled" : "disabled"}.`,
       ...(input.discoverNewSources ? [
         `Previously used canonical publisher domains (server snapshot): ${(input.knownSourceDomains ?? []).join(", ") || "none"}.`,
+      ] : []),
+    ] : []),
+    ...(job.type === "rankings_research" ? [
+      `Ranking source discovery: ${input.discoverNewSources ? "enabled" : "disabled"}.`,
+      ...(input.discoverNewSources ? [
+        `Previously used canonical ranking publisher domains (server snapshot): ${(input.knownSourceDomains ?? []).join(", ") || "none"}.`,
       ] : []),
     ] : []),
     ...(rankingRequest ? [rankingRequest] : []),

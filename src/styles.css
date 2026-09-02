@@ -462,7 +462,10 @@ tbody tr:hover { background: rgba(255, 255, 255, .015); }
 .agent-source-toolbar label, .agent-list-controls label { min-width: 0; display: flex; flex-direction: column; gap: 6px; color: var(--subtle); font-size: 7px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
 .agent-source-toolbar select, .agent-list-controls select { width: 100%; height: 34px; padding: 0 30px 0 9px; color: var(--text); border: 1px solid var(--border); border-radius: 5px; background: #101114; font-size: 9px; }
 .agent-source-toolbar select:focus-visible, .agent-list-controls select:focus-visible, .agent-player-filter__input:focus-within { border-color: rgba(245, 158, 11, .65); outline: 2px solid rgba(245, 158, 11, .12); outline-offset: 0; }
-.agent-source-toolbar small { align-self: center; color: var(--subtle); font-size: 7px; line-height: 1.5; }
+.agent-source-toolbar small { color: var(--subtle); font-size: 7px; line-height: 1.5; }
+.agent-source-toolbar__context { align-self: center; display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
+.ranking-discovery-count { width: fit-content; display: inline-flex; align-items: center; gap: 4px; color: var(--amber) !important; font-size: 7px; font-weight: 800; }
+.ranking-new-source-badge { margin-left: 6px; padding: 2px 4px; color: var(--amber); border: 1px solid rgba(245, 158, 11, .28); border-radius: 999px; background: var(--amber-soft); font-size: 6px; font-weight: 900; letter-spacing: .04em; text-transform: uppercase; }
 .agent-source-strip { display: flex; gap: 6px; overflow-x: auto; padding: 10px 13px; border-bottom: 1px solid var(--border-soft); background: #111215; scrollbar-width: thin; }
 .source-chip { flex: 0 0 auto; display: flex; align-items: center; overflow: hidden; border: 1px solid var(--border); border-radius: 5px; background: #101114; }
 .source-chip.is-active { border-color: rgba(245, 158, 11, .45); background: var(--amber-soft); }
@@ -575,6 +578,16 @@ tbody tr:hover { background: rgba(255, 255, 255, .015); }
 .research-field select { max-width: 240px; color-scheme: dark; }
 .research-field input:focus, .research-field select:focus, .owner-token-card input:focus { border-color: rgba(245, 158, 11, .6); box-shadow: 0 0 0 2px rgba(245, 158, 11, .1); }
 .research-field small { color: var(--subtle); font-size: 8px; line-height: 1.5; }
+.source-scout-toggle { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 9px; align-items: start; margin-top: 12px; padding: 10px; color: var(--text); border: 1px solid var(--border-soft); border-radius: 6px; background: #101114; cursor: pointer; }
+.source-scout-toggle > input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
+.source-scout-toggle__control { position: relative; width: 30px; height: 17px; margin-top: 1px; border: 1px solid var(--border); border-radius: 999px; background: #292b30; transition: border-color .15s ease, background .15s ease; }
+.source-scout-toggle__control i { position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; border-radius: 50%; background: var(--muted); transition: transform .15s ease, background .15s ease; }
+.source-scout-toggle > input:checked + .source-scout-toggle__control { border-color: rgba(245, 158, 11, .55); background: rgba(245, 158, 11, .18); }
+.source-scout-toggle > input:checked + .source-scout-toggle__control i { background: var(--amber); transform: translateX(13px); }
+.source-scout-toggle > input:focus-visible + .source-scout-toggle__control { outline: 2px solid rgba(245, 158, 11, .65); outline-offset: 2px; }
+.source-scout-toggle > span:last-child { display: grid; gap: 3px; }
+.source-scout-toggle strong { font-size: 10px; }
+.source-scout-toggle small { color: var(--muted); font-size: 8px; line-height: 1.4; }
 .research-guardrails { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 7px; margin-top: 14px; padding: 9px 10px; border: 1px solid rgba(72, 199, 142, .15); border-radius: 5px; background: rgba(72, 199, 142, .04); }
 .research-guardrails span { display: inline-flex; align-items: center; gap: 5px; color: var(--subtle); font-size: 8px; }
 .research-guardrails span:first-child { color: var(--green); }

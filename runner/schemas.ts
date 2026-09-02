@@ -10,6 +10,24 @@ const scoringFormatSchema = z.enum(["ppr", "half_ppr", "standard"]);
 const rankingTypeSchema = z.enum(["redraft", "weekly", "rest_of_season", "dynasty", "rookie"]);
 const positionSchema = z.enum(["ALL", "QB", "RB", "WR", "TE", "K", "DST"]);
 
+const commonMultiLabelPublicSuffixes = new Set([
+  "ac.uk", "co.uk", "gov.uk", "me.uk", "net.uk", "org.uk",
+  "asn.au", "com.au", "edu.au", "gov.au", "net.au", "org.au",
+  "ac.nz", "co.nz", "govt.nz", "net.nz", "org.nz",
+  "co.in", "firm.in", "gen.in", "ind.in", "net.in", "org.in",
+  "co.jp", "ne.jp", "or.jp", "co.kr", "ne.kr", "or.kr",
+  "com.br", "net.br", "org.br", "com.cn", "net.cn", "org.cn",
+  "com.mx", "com.sg", "com.tw", "co.za", "com.ar",
+]);
+
+function canonicalPublisherDomain(value: string) {
+  const hostname = new URL(value).hostname.toLowerCase().replace(/\.$/, "").replace(/^www\./, "");
+  const labels = hostname.split(".").filter(Boolean);
+  if (labels.length <= 2 || /^\d+(?:\.\d+){3}$/.test(hostname) || hostname.includes(":")) return hostname;
+  const finalTwo = labels.slice(-2).join(".");
+  return commonMultiLabelPublicSuffixes.has(finalTwo) ? labels.slice(-3).join(".") : finalTwo;
+}
+
 export const researchJobInputSchema = z.object({
   type: jobTypeSchema,
   subject: boundedText(200).optional(),
@@ -62,7 +80,7 @@ const rankingSnapshotSchema = z.object({
 
 const sourcedRankingSnapshotSchema = rankingSnapshotSchema.extend({
   sourceName: boundedText(100),
-  sourceUrl: z.string().url().max(2_000),
+  sourceUrl: httpUrlSchema,
 }).strict();
 
 const sleeperSourceSchema = z.object({
@@ -142,7 +160,7 @@ export const researchResultSchema = z.object({
   }
   const sources = result.rankingSnapshots ?? [];
   const sourceNames = sources.map((snapshot) => snapshot.sourceName.trim().toLowerCase());
-  const sourceHosts = sources.map((snapshot) => new URL(snapshot.sourceUrl).hostname.replace(/^www\./, "").toLowerCase());
+  const sourceHosts = sources.map((snapshot) => canonicalPublisherDomain(snapshot.sourceUrl));
   if (new Set(sourceNames).size !== sourceNames.length || new Set(sourceHosts).size !== sourceHosts.length) {
     context.addIssue({ code: "custom", path: ["rankingSnapshots"], message: "Ranking research sources must use distinct publishers and source URLs" });
   }

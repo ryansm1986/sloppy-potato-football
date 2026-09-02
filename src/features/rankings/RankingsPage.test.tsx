@@ -27,6 +27,7 @@ const secondExpertSnapshot = {
   id: "snapshot-2",
   source: { id: "source-2", canonicalKey: "external:expert-b", slug: "expert-b", name: "Expert B", kind: "external" as const, provider: null, attributionUrl: "https://example.com/expert-b-rankings" },
   title: "Expert B PPR Rankings",
+  sourceUrl: "https://example.com/expert-b-rankings/2026-ppr",
   generatedAt: "2026-09-01T13:00:00.000Z",
   entries: [
     { id: "entry-b1", playerId: null, playerName: "Ja'Marr Chase", position: "WR", team: "CIN", rank: 1, previousRank: 2, tier: 1, insight: "Elite ceiling." },
@@ -163,11 +164,11 @@ describe("RankingsPage", () => {
     const aggregateChase = within(agent).getByRole("button", { name: /Ja'Marr Chase.*Average 1\.5/i });
     expect(within(aggregateChase).getByLabelText("Overall rank unavailable; WR rank 1")).toBeInTheDocument();
     fireEvent.click(aggregateChase);
-    expect(within(agent).getByRole("link", { name: /Expert B/i })).toHaveAttribute("href", "https://example.com/expert-b-rankings");
+    expect(within(agent).getByRole("link", { name: /Expert B/i })).toHaveAttribute("href", "https://example.com/expert-b-rankings/2026-ppr");
 
     fireEvent.click(within(agent).getByRole("button", { name: "Expert B" }));
     expect(within(agent).getByText("Expert B PPR Rankings")).toBeInTheDocument();
-    expect(within(agent).getByRole("link", { name: /View original source/i })).toHaveAttribute("href", "https://example.com/expert-b-rankings");
+    expect(within(agent).getByRole("link", { name: /View original source/i })).toHaveAttribute("href", "https://example.com/expert-b-rankings/2026-ppr");
     const expertChase = within(agent).getByRole("button", { name: /Ja'Marr Chase.*Expert B/i });
     expect(expertChase).toHaveAttribute("aria-expanded", "false");
     expect(within(expertChase).getByLabelText("Overall rank unavailable; WR rank 1")).toBeInTheDocument();
@@ -179,6 +180,53 @@ describe("RankingsPage", () => {
     expect(within(details).getByText("Latest player research")).toBeInTheDocument();
     expect(within(details).getByText("Weekly & season stats")).toBeInTheDocument();
     expect(within(details).getByRole("link", { name: /Research latest news/i })).toHaveAttribute("href", "/research?subject=Ja'Marr%20Chase");
+  });
+
+  it("labels newly discovered ranking publishers and reports the scout result", async () => {
+    const discoveredSnapshot = {
+      ...secondExpertSnapshot,
+      discoverNewSources: true,
+      isNewDiscovery: true,
+      newPublisherCount: 1,
+      researchJobId: "ranking-scout-job-1",
+      createdAt: "2026-09-01T13:05:00.000Z",
+    };
+    const otherScopeDiscovery = {
+      ...secondExpertSnapshot,
+      id: "snapshot-qb-scout",
+      source: { ...secondExpertSnapshot.source, id: "source-qb-scout", canonicalKey: "external:qb-scout", name: "QB Scout" },
+      sourceUrl: "https://example.com/qb-scout",
+      positionScope: "QB",
+      generatedAt: "2026-09-01T12:30:00.000Z",
+      discoverNewSources: true,
+      isNewDiscovery: true,
+      newPublisherCount: 8,
+      researchJobId: "ranking-scout-job-qb",
+      entries: secondExpertSnapshot.entries.map((entry) => ({ ...entry, position: "QB" })),
+    };
+    const historicalDiscovery = {
+      ...agentSnapshot,
+      id: "snapshot-old-scout",
+      source: { ...agentSnapshot.source, id: "source-old-scout", canonicalKey: "external:old-scout", name: "Old Scout", kind: "external" as const },
+      generatedAt: "2026-09-01T14:00:00.000Z",
+      createdAt: "2026-09-01T12:50:00.000Z",
+      discoverNewSources: true,
+      isNewDiscovery: true,
+      newPublisherCount: 3,
+      researchJobId: "ranking-scout-job-old",
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ snapshots: [agentSnapshot, discoveredSnapshot, otherScopeDiscovery, historicalDiscovery] })));
+    render(<MemoryRouter><RankingsPage /></MemoryRouter>);
+
+    const agent = await screen.findByRole("region", { name: "Agent Rankings" });
+    const sourceSelect = within(agent).getByLabelText("Ranking source");
+    expect(within(sourceSelect).getByRole("option", { name: "Expert B · New source" })).toBeInTheDocument();
+    expect(within(agent).getByText("Latest scout: 1 new publisher")).toBeInTheDocument();
+    expect(within(agent).getByText("New source")).toBeInTheDocument();
+    expect(within(agent).getByRole("button", { name: /Expert B.*New source/i })).toBeInTheDocument();
+    expect(within(sourceSelect).queryByRole("option", { name: /QB Scout/i })).not.toBeInTheDocument();
+    expect(within(sourceSelect).getByRole("option", { name: "Old Scout" })).toBeInTheDocument();
+    expect(within(sourceSelect).queryByRole("option", { name: /Old Scout.*New source/i })).not.toBeInTheDocument();
   });
 
   it("filters the agent list by position and player name and changes the display count", async () => {

@@ -1,8 +1,16 @@
 import type { DrizzleD1Database } from "drizzle-orm/d1";
 import { z } from "zod";
 import * as schema from "../db/schema";
-import { createRankingSnapshot, rankingSnapshotInput } from "./ranking-snapshots";
 import {
+  createRankingSnapshot,
+  discardPendingRankingSnapshots,
+  loadAllKnownRankingSourceDomains,
+  publishRankingSnapshots,
+  rankingSnapshotInput,
+  snapshotKnownRankingSourceDomains,
+} from "./ranking-snapshots";
+import {
+  canonicalSourceDomain,
   discardUnpublishedSleeperReport,
   persistSleeperReport,
   publishSleeperReport,
@@ -18,6 +26,10 @@ const jobType = z.enum(["source_refresh", "player_research", "rankings_research"
 const scoringFormat = z.enum(["ppr", "half_ppr", "standard"]);
 const rankingType = z.enum(["redraft", "weekly", "rest_of_season", "dynasty", "rookie"]);
 const position = z.enum(["ALL", "QB", "RB", "WR", "TE", "K", "DST"]);
+const httpSourceUrl = z.string().url().max(2_000).refine((value) => {
+  const protocol = new URL(value).protocol;
+  return protocol === "http:" || protocol === "https:";
+}, "Source URLs must use HTTP or HTTPS");
 
 export const createResearchJobInput = z.object({
   type: jobType,
@@ -53,12 +65,14 @@ export const createResearchJobInput = z.object({
     : undefined,
   leagueSize: value.type === "sleepers_research" ? value.leagueSize ?? 12 : undefined,
   sleepersPerPosition: value.type === "sleepers_research" ? value.sleepersPerPosition ?? 8 : undefined,
-  discoverNewSources: value.type === "sleepers_research" ? value.discoverNewSources : undefined,
+  discoverNewSources: value.type === "sleepers_research" || value.type === "rankings_research"
+    ? value.discoverNewSources
+    : undefined,
 }));
 
 type ResearchTaskInput = z.infer<typeof createResearchJobInput> & {
-  // Populated only by the Worker from published report history. It is not part
-  // of the owner-facing request schema and therefore cannot be client-supplied.
+  // Populated only by the Worker from completed ranking/sleeper source history.
+  // It is not part of the owner-facing schema and cannot be client-supplied.
   knownSourceDomains?: string[];
 };
 
@@ -92,12 +106,12 @@ const insightInput = z.object({
 
 const sourcedRankingSnapshotInput = z.object({
   sourceName: safeLabel,
-  sourceUrl: z.string().url().max(2_000),
+  sourceUrl: httpSourceUrl,
 }).passthrough();
 
 const multiSourceRankingInput = z.array(sourcedRankingSnapshotInput).min(3).max(5).superRefine((snapshots, context) => {
   const names = snapshots.map((snapshot) => snapshot.sourceName.trim().toLowerCase());
-  const hosts = snapshots.map((snapshot) => new URL(snapshot.sourceUrl).hostname.replace(/^www\./, "").toLowerCase());
+  const hosts = snapshots.map((snapshot) => canonicalSourceDomain(snapshot.sourceUrl));
   if (new Set(names).size !== names.length || new Set(hosts).size !== hosts.length) {
     context.addIssue({
       code: "custom",
@@ -149,6 +163,7 @@ type ResearchJobRow = {
   ranking_snapshot_id: string | null;
   error_code: string | null;
   error_message: string | null;
+  new_publisher_count: number;
   created_at: number;
   started_at: number | null;
   completed_at: number | null;
@@ -205,6 +220,7 @@ function toPublicJob(row: ResearchJobRow) {
     leagueSize: input.leagueSize ?? null,
     sleepersPerPosition: input.sleepersPerPosition ?? null,
     discoverNewSources: input.discoverNewSources ?? false,
+    newPublisherCount: row.new_publisher_count,
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
     startedAt: iso(row.started_at),
@@ -228,7 +244,7 @@ function executionContext(row: ResearchJobRow) {
     case "player_research":
       return `Research the named NFL fantasy player (${input.subject}) for ${scope}. Summarize current role, material news, risk, and ranking implications with citations.`;
     case "rankings_research":
-      return `Research current fantasy-football ranking boards for ${scope}${input.subject ? `, focused on ${input.subject}` : ""}. Find at least three distinct reputable publishers and preserve each publisher as a separately attributed source board so the app can aggregate them. For EACH source return up to the requested Top ${rankingLimit}: exactly ${rankingLimit} contiguous entries when that publisher exposes them, or every verifiable entry available up to ${rankingLimit}. For ALL, use cross-position overall boards rather than quarterback-only or separate positional lists. Cite direct ranking URLs; never synthesize an agent-authored source.`;
+      return `Research current fantasy-football ranking boards for ${scope}${input.subject ? `, focused on ${input.subject}` : ""}. Find at least three distinct reputable publishers and preserve each publisher as a separately attributed source board so the app can aggregate them. For EACH source return up to the requested Top ${rankingLimit}: exactly ${rankingLimit} contiguous entries when that publisher exposes them, or every verifiable entry available up to ${rankingLimit}. For ALL, use cross-position overall boards rather than quarterback-only or separate positional lists. Cite direct ranking URLs; never synthesize an agent-authored source.${input.discoverNewSources ? ` Source discovery is enabled. Previously used canonical ranking publisher domains: ${(input.knownSourceDomains ?? []).join(", ") || "none"}. Try to include at least two credible current-season ranking publisher domains outside that snapshot; if they cannot be verified, fall back to the strongest established ranking sources.` : ""}`;
     case "sleepers_research":
       return `Research current-season PPR redraft sleepers for a ${input.leagueSize ?? 12}-team league. Return up to ${input.sleepersPerPosition ?? 8} evidence-backed candidates for each of QB, RB, WR, and TE. Preserve each independent publisher's direct article URL and recommendation for each player. Recommend an overall-pick range for every candidate; the server derives rounds and ranks candidates by their count of unique recommending source domains.${input.discoverNewSources ? ` Source discovery is enabled. Previously used canonical publisher domains: ${(input.knownSourceDomains ?? []).join(", ") || "none"}. Try to include at least two credible current-season publisher domains outside that snapshot; if they cannot be verified, fall back to the strongest established sources.` : ""}`;
   }
@@ -274,8 +290,12 @@ export async function createResearchJob(
 
   const id = crypto.randomUUID();
   const now = Date.now();
-  const taskInput: ResearchTaskInput = input.type === "sleepers_research" && input.discoverNewSources
-    ? { ...input, knownSourceDomains: await snapshotKnownSleeperSourceDomains(db) }
+  const taskInput: ResearchTaskInput = input.discoverNewSources
+    ? input.type === "sleepers_research"
+      ? { ...input, knownSourceDomains: await snapshotKnownSleeperSourceDomains(db) }
+      : input.type === "rankings_research"
+        ? { ...input, knownSourceDomains: await snapshotKnownRankingSourceDomains(db) }
+        : input
     : input;
   await db.$client.batch([
     db.$client.prepare(
@@ -333,6 +353,7 @@ export async function retryResearchJob(db: Database, id: string, ownerIdentity =
     if (!row || row.owner_identity !== ownerIdentity) throw new ResearchBridgeError("not_found", "Research job not found", 404);
     throw new ResearchBridgeError("job_conflict", "Only failed or cancelled jobs can be retried", 409);
   }
+  await discardPendingRankingSnapshots(db, id);
   await insertEvent(db, id, "retried", "owner", ownerIdentity);
   return toPublicJob((await findJob(db, id))!);
 }
@@ -413,6 +434,12 @@ export async function claimResearchJob(db: Database, runnerId: string) {
       };
     }
   }
+  await db.$client.prepare(
+    `DELETE FROM ranking_snapshots
+     WHERE status = 'pending' AND research_job_id IN (
+       SELECT id FROM research_jobs WHERE status = 'running' AND lease_expires_at < ?
+     )`,
+  ).bind(now).run();
   await db.$client.prepare(
     `UPDATE research_jobs SET status = 'queued', leased_by_runner_id = NULL, lease_token = NULL,
        lease_expires_at = NULL, updated_at = ?
@@ -504,6 +531,7 @@ export async function completeResearchJob(db: Database, jobId: string, input: z.
   if (row.status === "completed") {
     if (row.completion_key !== input.resultId) throw new ResearchBridgeError("result_conflict", "This job already has a different result", 409);
     const rankingSnapshotIds = await findJobRankingSnapshotIds(db, jobId);
+    const repairedRankingPublications = await publishRankingSnapshots(db, jobId);
     const sleeperReportId = await findJobSleeperReportId(db, jobId);
     const repairedPublication = sleeperReportId ? await publishSleeperReport(db, sleeperReportId) : false;
     await db.$client.prepare(
@@ -511,6 +539,11 @@ export async function completeResearchJob(db: Database, jobId: string, input: z.
     ).bind(Date.now(), Date.now(), input.runnerId, jobId).run();
     if (repairedPublication) {
       await insertEvent(db, jobId, "publication_repaired", "runner", input.runnerId, { sleeperReportId });
+    }
+    if (repairedRankingPublications > 0) {
+      await insertEvent(db, jobId, "ranking_publication_repaired", "runner", input.runnerId, {
+        rankingSnapshotIds,
+      });
     }
     return { job: toPublicJob(row), idempotent: true, rankingSnapshotId: row.ranking_snapshot_id, rankingSnapshotIds, sleeperReportId };
   }
@@ -523,6 +556,7 @@ export async function completeResearchJob(db: Database, jobId: string, input: z.
   const provider = runner?.provider === "claude" ? "claude" : "codex";
   const generatedAt = input.result.generatedAt ?? new Date(now).toISOString();
   const snapshotsToCreate: Array<z.infer<typeof rankingSnapshotInput>> = [];
+  const rankingSnapshotDomains: string[] = [];
   const parsedSleeperReport = row.job_type === "sleepers_research"
     ? sleeperReportInput.parse(input.result.sleeperReport)
     : null;
@@ -552,6 +586,7 @@ export async function completeResearchJob(db: Database, jobId: string, input: z.
       delete fields.sourceUrl;
       const slug = sourceSlug(rawSnapshot.sourceName, `rankings-source-${index + 1}`);
       const domain = new URL(rawSnapshot.sourceUrl).hostname.replace(/^www\./, "").toLowerCase();
+      rankingSnapshotDomains.push(canonicalSourceDomain(rawSnapshot.sourceUrl));
       const snapshot = rankingSnapshotInput.parse({
         ...fields,
         scoringFormat: taskInput.scoringFormat ?? "ppr",
@@ -622,8 +657,29 @@ export async function completeResearchJob(db: Database, jobId: string, input: z.
   }
 
   const rankingSnapshotIds: string[] = [];
-  for (const snapshot of snapshotsToCreate) {
-    const created = await createRankingSnapshot(db, snapshot);
+  // The prompt receives a bounded recent-domain snapshot, but persisted labels
+  // compare against the entire source registry and completed snapshot history.
+  // This prevents an older publisher from becoming falsely "new" after it
+  // falls out of the prompt cap.
+  const allKnownRankingDomains = row.job_type === "rankings_research"
+    ? new Set(await loadAllKnownRankingSourceDomains(db))
+    : new Set<string>();
+  const newRankingDomains = new Set(taskInput.discoverNewSources && row.job_type === "rankings_research"
+    ? rankingSnapshotDomains.filter((domain) => !allKnownRankingDomains.has(domain))
+    : []);
+  for (const [index, snapshot] of snapshotsToCreate.entries()) {
+    const rankingDiscovery = row.job_type === "rankings_research" ? {
+      researchJobId: jobId,
+      discoverNewSources: taskInput.discoverNewSources ?? false,
+      isNewDiscovery: newRankingDomains.has(rankingSnapshotDomains[index]),
+      newPublisherCount: newRankingDomains.size,
+    } : {
+      researchJobId: jobId,
+      discoverNewSources: false,
+      isNewDiscovery: false,
+      newPublisherCount: 0,
+    };
+    const created = await createRankingSnapshot(db, snapshot, rankingDiscovery);
     rankingSnapshotIds.push(created.id);
   }
   const rankingSnapshotId = rankingSnapshotIds[0] ?? null;
@@ -646,13 +702,14 @@ export async function completeResearchJob(db: Database, jobId: string, input: z.
   const finalizedAt = Date.now();
   const updated = await db.$client.prepare(
     `UPDATE research_jobs SET status = 'completed', completion_key = ?, result_json = ?,
-       ranking_snapshot_id = ?, completed_at = ?, updated_at = ?, lease_expires_at = NULL
+       ranking_snapshot_id = ?, new_publisher_count = ?, completed_at = ?, updated_at = ?, lease_expires_at = NULL
      WHERE id = ? AND status = 'running' AND leased_by_runner_id = ? AND lease_token = ?
        AND lease_expires_at >= ?`,
   ).bind(
     input.resultId,
     resultJson,
     rankingSnapshotId,
+    newRankingDomains.size,
     finalizedAt,
     finalizedAt,
     jobId,
@@ -662,8 +719,10 @@ export async function completeResearchJob(db: Database, jobId: string, input: z.
   ).run();
   if ((updated.meta.changes ?? 0) === 0) {
     if (sleeperReportId) await discardUnpublishedSleeperReport(db, jobId);
+    await discardPendingRankingSnapshots(db, jobId);
     throw new ResearchBridgeError("lease_invalid", "The job lease changed before completion", 409);
   }
+  await publishRankingSnapshots(db, jobId);
   if (sleeperReportId) await publishSleeperReport(db, sleeperReportId);
   await db.$client.prepare(
     "UPDATE research_runners SET status = 'idle', current_job_id = NULL, last_seen_at = ?, updated_at = ? WHERE id = ? AND current_job_id = ?",
@@ -690,11 +749,15 @@ export async function failResearchJob(db: Database, jobId: string, input: z.infe
   assertActiveLease(row, input.runnerId, input.leaseToken, now);
   const retry = input.error.retryable && row.attempt_count < row.max_attempts;
   const nextStatus = retry ? "queued" : "failed";
-  await db.$client.prepare(
+  const updated = await db.$client.prepare(
     `UPDATE research_jobs SET status = ?, leased_by_runner_id = NULL, lease_token = NULL,
        lease_expires_at = NULL, error_code = ?, error_message = ?,
        completed_at = ?, updated_at = ? WHERE id = ? AND status = 'running' AND lease_token = ?`,
   ).bind(nextStatus, input.error.code, input.error.message, retry ? null : now, now, jobId, input.leaseToken).run();
+  if ((updated.meta.changes ?? 0) === 0) {
+    throw new ResearchBridgeError("lease_invalid", "The job lease changed before failure was recorded", 409);
+  }
+  await discardPendingRankingSnapshots(db, jobId);
   await db.$client.prepare(
     "UPDATE research_runners SET status = 'idle', current_job_id = NULL, last_seen_at = ?, updated_at = ? WHERE id = ? AND current_job_id = ?",
   ).bind(now, now, input.runnerId, jobId).run();

@@ -37,6 +37,7 @@ import {
   Sparkles,
   Star,
   SwitchCamera,
+  Telescope,
   TrendingDown,
   TrendingUp,
 } from "lucide-react";
@@ -50,6 +51,7 @@ import {
 import { fetchAgentRankings, type AgentRankingSnapshot } from "./agent-api";
 import {
   aggregateRankingSnapshots,
+  isSnapshotInScope,
   normalizePlayerName,
   selectLatestSnapshotPerSource,
   type AggregatedRankingEntry,
@@ -377,15 +379,19 @@ function AgentSnapshotPanel({
   const [listPosition, setListPosition] = useState("ALL");
   const [playerNameFilter, setPlayerNameFilter] = useState("");
   const [displayCount, setDisplayCount] = useState("50");
-  const latestBySource = useMemo(() => selectLatestSnapshotPerSource(snapshots), [snapshots]);
   const aggregate = useMemo(() => aggregateRankingSnapshots(snapshots), [snapshots]);
+  const scopedSnapshots = useMemo(
+    () => aggregate ? snapshots.filter((snapshot) => isSnapshotInScope(snapshot, aggregate.scope)) : snapshots,
+    [aggregate, snapshots],
+  );
+  const latestBySource = useMemo(() => selectLatestSnapshotPerSource(scopedSnapshots), [scopedSnapshots]);
   const selectedSource = latestBySource.find((snapshot) => snapshot.source.canonicalKey === selectedSourceKey);
   const sourceHistory = selectedSourceKey === "aggregate"
     ? []
-    : snapshots.filter((snapshot) => snapshot.source.canonicalKey === selectedSourceKey);
+    : scopedSnapshots.filter((snapshot) => snapshot.source.canonicalKey === selectedSourceKey);
   const selected = selectedSourceKey === "aggregate"
     ? aggregate?.snapshot
-    : snapshots.find((snapshot) => snapshot.id === selectedId && snapshot.source.canonicalKey === selectedSourceKey) ?? selectedSource;
+    : scopedSnapshots.find((snapshot) => snapshot.id === selectedId && snapshot.source.canonicalKey === selectedSourceKey) ?? selectedSource;
   const displayEntries: DisplayRankingEntry[] = selectedSourceKey === "aggregate"
     ? aggregate?.entries ?? []
     : selected?.entries ?? [];
@@ -418,6 +424,27 @@ function AgentSnapshotPanel({
   const visibleEntries = displayCount === "ALL"
     ? matchingEntries
     : matchingEntries.slice(0, Number(displayCount));
+  const discoverySnapshot = useMemo(
+    () => scopedSnapshots
+      .filter((snapshot) => snapshot.discoverNewSources)
+      .sort((left, right) => {
+        const leftSavedAt = left.savedAt ?? left.createdAt ?? left.generatedAt;
+        const rightSavedAt = right.savedAt ?? right.createdAt ?? right.generatedAt;
+        return Date.parse(rightSavedAt) - Date.parse(leftSavedAt)
+          || rightSavedAt.localeCompare(leftSavedAt)
+          || right.id.localeCompare(left.id);
+      })[0],
+    [scopedSnapshots],
+  );
+  const discoveryRunSnapshots = discoverySnapshot?.researchJobId
+    ? scopedSnapshots.filter((snapshot) => snapshot.researchJobId === discoverySnapshot.researchJobId)
+    : discoverySnapshot ? [discoverySnapshot] : [];
+  const newPublisherCount = discoveryRunSnapshots.find((snapshot) => typeof snapshot.newPublisherCount === "number")?.newPublisherCount ?? 0;
+  const isLatestRunDiscovery = (snapshot: AgentRankingSnapshot) => Boolean(
+    discoverySnapshot?.researchJobId
+    && snapshot.researchJobId === discoverySnapshot.researchJobId
+    && snapshot.isNewDiscovery,
+  );
 
   useEffect(() => {
     setSelectedId(null);
@@ -506,11 +533,16 @@ function AgentSnapshotPanel({
                 {[...latestBySource]
                   .sort((left, right) => left.source.name.localeCompare(right.source.name))
                   .map((snapshot) => (
-                    <option key={snapshot.source.canonicalKey} value={snapshot.source.canonicalKey}>{snapshot.source.name}</option>
+                    <option key={snapshot.source.canonicalKey} value={snapshot.source.canonicalKey}>{snapshot.source.name}{isLatestRunDiscovery(snapshot) ? " · New source" : ""}</option>
                   ))}
               </select>
             </label>
-            <small>Switch between the combined board and each preserved source.</small>
+            <div className="agent-source-toolbar__context">
+              <small>Switch between the combined board and each preserved source.</small>
+              {discoverySnapshot && (
+                <span className="ranking-discovery-count"><Telescope size={11} /> Latest scout: {newPublisherCount ? `${newPublisherCount} new ${newPublisherCount === 1 ? "publisher" : "publishers"}` : "no new publishers"}</span>
+              )}
+            </div>
           </div>
           <div className="agent-source-strip" aria-label="Ranking sources">
             {aggregate && (
@@ -530,7 +562,10 @@ function AgentSnapshotPanel({
                 const active = snapshot.source.canonicalKey === selectedSourceKey;
                 return (
                   <div className={`source-chip${active ? " is-active" : ""}`} key={snapshot.source.canonicalKey}>
-                    <button type="button" aria-pressed={active} onClick={() => selectSource(snapshot)}>{snapshot.source.name}</button>
+                    <button type="button" aria-pressed={active} onClick={() => selectSource(snapshot)}>
+                      {snapshot.source.name}
+                      {isLatestRunDiscovery(snapshot) && <span className="ranking-new-source-badge">New source</span>}
+                    </button>
                     <button
                       className={favorite ? "is-favorite" : ""}
                       type="button"
@@ -549,7 +584,7 @@ function AgentSnapshotPanel({
               <strong>{selected.title}</strong>
               <span>{selectedSourceKey === "aggregate" ? `${aggregate?.sourceSnapshots.length ?? 0} latest compatible source${aggregate?.sourceSnapshots.length === 1 ? "" : "s"}` : `${selected.source.name} · ${(selected.source.kind ?? "agent").toUpperCase()} ${selected.source.provider ? `via ${selected.source.provider}` : ""}`}</span>
               <code title="Stable source key">{selectedSourceKey === "aggregate" ? "Unweighted arithmetic mean" : `Source key · ${selected.source.canonicalKey}`}</code>
-              {selectedSourceKey !== "aggregate" && selected.source.attributionUrl && <a className="snapshot-source-link" href={selected.source.attributionUrl} target="_blank" rel="noreferrer">View original source <ExternalLink size={10} /></a>}
+              {selectedSourceKey !== "aggregate" && (selected.sourceUrl || selected.source.attributionUrl) && <a className="snapshot-source-link" href={selected.sourceUrl ?? selected.source.attributionUrl ?? undefined} target="_blank" rel="noreferrer">View original source <ExternalLink size={10} /></a>}
             </div>
             <div className="snapshot-scope">
               <span><Clock3 size={13} /> {relativeTime(selected.generatedAt)}</span>

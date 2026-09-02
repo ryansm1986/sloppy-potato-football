@@ -92,6 +92,52 @@ describe("agent ranking snapshots", () => {
     expect(source?.snapshotCount).toBeGreaterThanOrEqual(1);
   });
 
+  it("preserves source identity when a publisher changes name and ranking subdomain", async () => {
+    const db = drizzle(env.DB, { schema });
+    const suffix = crypto.randomUUID().slice(0, 8);
+    const root = `${suffix}-publisher.example`;
+    const first = await createRankingSnapshot(db, rankingSnapshotInput.parse({
+      ...snapshotInput,
+      source: {
+        canonicalKey: `external:foo-rankings-${suffix}`,
+        slug: `foo-rankings-${suffix}`,
+        name: `Foo Rankings ${suffix}`,
+        kind: "external",
+        attributionUrl: `https://rankings.${root}/ppr`,
+        metadata: { favorite: true },
+      },
+      externalRunId: `foo-first-${suffix}`,
+    }));
+    const second = await createRankingSnapshot(db, rankingSnapshotInput.parse({
+      ...snapshotInput,
+      source: {
+        canonicalKey: `external:foo-sports-${suffix}`,
+        slug: `foo-sports-${suffix}`,
+        name: `Foo Sports ${suffix}`,
+        kind: "external",
+        attributionUrl: `https://${root}/rankings`,
+      },
+      externalRunId: `foo-second-${suffix}`,
+    }));
+
+    const rows = await env.DB.prepare(
+      `SELECT sources.id, sources.canonical_key, sources.metadata_json, snapshots.source_url
+       FROM ranking_snapshots snapshots
+       JOIN ranking_sources sources ON sources.id = snapshots.source_id
+       WHERE snapshots.id IN (?, ?)
+       ORDER BY snapshots.id`,
+    ).bind(first.id, second.id).all<{
+      id: string; canonical_key: string; metadata_json: string; source_url: string | null;
+    }>();
+    expect(new Set(rows.results.map((row) => row.id)).size).toBe(1);
+    expect(rows.results[0]?.canonical_key).toBe(`external:foo-rankings-${suffix}`);
+    expect(JSON.parse(rows.results[0]?.metadata_json ?? "{}")).toMatchObject({ favorite: true });
+    expect(new Set(rows.results.map((row) => row.source_url))).toEqual(new Set([
+      `https://rankings.${root}/ppr`,
+      `https://${root}/rankings`,
+    ]));
+  });
+
   it("returns exact-scope latest snapshots per source without older history", async () => {
     const db = drizzle(env.DB, { schema });
     const suffix = crypto.randomUUID().slice(0, 8);

@@ -321,6 +321,11 @@ export const rankingSnapshots = sqliteTable(
     generatedAt: integer("generated_at", { mode: "timestamp_ms" }).notNull(),
     summary: text("summary"),
     methodology: text("methodology"),
+    researchJobId: text("research_job_id"),
+    sourceUrl: text("source_url"),
+    discoverNewSources: integer("discover_new_sources", { mode: "boolean" }).notNull().default(false),
+    isNewDiscovery: integer("is_new_discovery", { mode: "boolean" }).notNull().default(false),
+    newPublisherCount: integer("new_publisher_count").notNull().default(0),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().default(nowMs),
   },
   (table) => [
@@ -349,6 +354,7 @@ export const rankingSnapshots = sqliteTable(
       table.generatedAt,
       table.id,
     ),
+    index("ranking_snapshots_research_job_idx").on(table.researchJobId, table.externalRunId),
   ],
 );
 
@@ -464,6 +470,7 @@ export const researchJobs = sqliteTable(
     rankingSnapshotId: text("ranking_snapshot_id").references(() => rankingSnapshots.id, { onDelete: "set null" }),
     errorCode: text("error_code"),
     errorMessage: text("error_message"),
+    newPublisherCount: integer("new_publisher_count").notNull().default(0),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().default(nowMs),
     startedAt: integer("started_at", { mode: "timestamp_ms" }),
     completedAt: integer("completed_at", { mode: "timestamp_ms" }),
