@@ -6,6 +6,7 @@ import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RunnerApiClient } from "./api-client.js";
+import { RunnerAuthenticationError } from "./api-client.js";
 import type { RunnerConfig } from "./config.js";
 import type { SpawnImplementation } from "./codex.js";
 import { RunnerController, runOneJob, type RunnerControllerPhase } from "./runner.js";
@@ -134,6 +135,29 @@ describe("local runner", () => {
       code: "INVALID_RESULT",
       retryable: true,
     }));
+  });
+
+  it("stops automatic polling after a rejected credential and remains stoppable", async () => {
+    const api = fakeApi();
+    api.heartbeat.mockRejectedValue(new RunnerAuthenticationError(401));
+    const lock = fakeLock();
+    const controller = new RunnerController(config, {
+      api: api as unknown as RunnerApiClient,
+      acquireLock: lock.acquire,
+    });
+
+    await controller.start();
+    await waitForPhase(controller, "error");
+    expect(api.heartbeat).toHaveBeenCalledOnce();
+    expect(api.claim).not.toHaveBeenCalled();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(api.heartbeat).toHaveBeenCalledOnce();
+
+    await expect(controller.stop()).resolves.toEqual({
+      stopped: true,
+      deferredUntilCurrentJobFinishes: false,
+    });
+    expect(controller.getSnapshot().phase).toBe("stopped");
   });
 
   it("supports pause, resume, bounded redacted observations, and safe idle stop", async () => {

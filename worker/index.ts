@@ -66,6 +66,17 @@ import {
   updateResearchSchedule,
   updateResearchScheduleInput,
 } from "./services/research-schedules";
+import {
+  authenticateRunnerCredential,
+  enrollRunnerCredential,
+  enrollRunnerCredentialInput,
+  hasEnrolledRunnerCredentials,
+  listRunnerCredentials,
+  revokeRunnerCredential,
+  RunnerCredentialError,
+  secureTokenEqual,
+  type AuthenticatedRunnerCredential,
+} from "./services/runner-credentials";
 
 type Bindings = {
   DB: D1Database;
@@ -75,7 +86,13 @@ type Bindings = {
   AGENT_RUNNER_TOKEN?: string;
 };
 
-const app = new Hono<{ Bindings: Bindings }>();
+type RunnerAuthorization =
+  | ({ kind: "device" } & AuthenticatedRunnerCredential)
+  | { kind: "legacy"; credentialId: null; ownerIdentity: "primary-owner"; deviceId: null; name: null };
+
+type Variables = { runnerAuthorization?: RunnerAuthorization };
+
+const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 const sleeperImportInput = z.object({
   leagueId: z.string().trim().regex(/^\d{5,30}$/, "Enter a numeric Sleeper league ID"),
 });
@@ -117,19 +134,45 @@ const requireResearchOwner = createMiddleware<{ Bindings: Bindings }>(async (con
   return next();
 });
 
-const requireAgentRunner = createMiddleware<{ Bindings: Bindings }>(async (context, next) => {
+const requireAgentRunner = createMiddleware<{ Bindings: Bindings; Variables: Variables }>(async (context, next) => {
   const configuredToken = context.env.AGENT_RUNNER_TOKEN;
   if (!configuredToken && isLocalRequest(context.req.url)) return next();
-  if (!configuredToken) {
+  const supplied = context.req.header("Authorization")?.replace(/^Bearer\s+/i, "").trim();
+
+  // Keep the original shared secret working during migration. Newly enrolled
+  // installations use independently revocable D1-backed credentials instead.
+  if (
+    configuredToken
+    && supplied
+    && await secureTokenEqual(supplied, configuredToken)
+    && !await hasEnrolledRunnerCredentials(database(context))
+  ) {
+    context.set("runnerAuthorization", {
+      kind: "legacy",
+      credentialId: null,
+      ownerIdentity: "primary-owner",
+      deviceId: null,
+      name: null,
+    });
+    return next();
+  }
+
+  if (supplied) {
+    const credential = await authenticateRunnerCredential(database(context), supplied);
+    if (credential) {
+      context.set("runnerAuthorization", { kind: "device", ...credential });
+      return next();
+    }
+    return context.json({ error: "unauthorized", message: "A valid agent runner token is required." }, 401);
+  }
+
+  if (!configuredToken && !await hasEnrolledRunnerCredentials(database(context))) {
     return context.json(
       { error: "runner_auth_not_configured", message: "Runner access is disabled until a runner token is configured." },
       503,
     );
   }
-  if (context.req.header("Authorization") !== `Bearer ${configuredToken}`) {
-    return context.json({ error: "unauthorized", message: "A valid agent runner token is required." }, 401);
-  }
-  return next();
+  return context.json({ error: "unauthorized", message: "A valid agent runner token is required." }, 401);
 });
 
 app.use("/api/imports/*", requireImportToken);
@@ -139,6 +182,14 @@ app.use("/api/runners/*", requireAgentRunner);
 
 function database(context: { env: Bindings }) {
   return drizzle(context.env.DB, { schema });
+}
+
+function runnerIdentityMismatch(
+  context: { get(key: "runnerAuthorization"): RunnerAuthorization | undefined },
+  runnerId: string,
+) {
+  const authorization = context.get("runnerAuthorization");
+  return authorization?.kind === "device" && authorization.runnerId !== runnerId;
 }
 
 type PlayerCursor = { searchName: string; id: string };
@@ -444,6 +495,32 @@ app.get("/api/research/runner/status", async (context) => {
   return context.json({ runner: await getRunnerStatus(database(context)) });
 });
 
+app.post("/api/research/runner-credentials", async (context) => {
+  const input = enrollRunnerCredentialInput.safeParse(await context.req.json().catch(() => null));
+  if (!input.success) {
+    return context.json(
+      { error: "invalid_request", message: input.error.issues[0]?.message ?? "Invalid runner credential" },
+      400,
+    );
+  }
+  const result = await enrollRunnerCredential(database(context), input.data);
+  context.header("Cache-Control", "no-store");
+  return context.json(
+    { credential: result.credential, token: result.token },
+    result.created ? 201 : 200,
+  );
+});
+
+app.get("/api/research/runner-credentials", async (context) => {
+  context.header("Cache-Control", "no-store");
+  return context.json({ credentials: await listRunnerCredentials(database(context)) });
+});
+
+app.delete("/api/research/runner-credentials/:credentialId", async (context) => {
+  await revokeRunnerCredential(database(context), context.req.param("credentialId"));
+  return context.body(null, 204);
+});
+
 app.get("/api/research/personal-rankings", async (context) => {
   const input = personalRankingQueryInput.safeParse({
     season: context.req.query("season"),
@@ -511,6 +588,9 @@ app.post("/api/runners/heartbeat", async (context) => {
   if (!input.success) {
     return context.json({ error: "invalid_request", message: input.error.issues[0]?.message ?? "Invalid runner heartbeat" }, 400);
   }
+  if (runnerIdentityMismatch(context, input.data.runnerId)) {
+    return context.json({ error: "runner_identity_mismatch", message: "This credential belongs to another runner." }, 403);
+  }
   return context.json({ runner: await heartbeatRunner(database(context), input.data) });
 });
 
@@ -519,6 +599,9 @@ app.post("/api/runners/jobs/claim", async (context) => {
   const input = claimResearchJobInput.safeParse(body);
   if (!input.success) {
     return context.json({ error: "invalid_request", message: input.error.issues[0]?.message ?? "Invalid job claim" }, 400);
+  }
+  if (runnerIdentityMismatch(context, input.data.runnerId)) {
+    return context.json({ error: "runner_identity_mismatch", message: "This credential belongs to another runner." }, 403);
   }
   return context.json({ job: await claimResearchJob(database(context), input.data.runnerId) });
 });
@@ -529,6 +612,9 @@ app.post("/api/runners/jobs/:jobId/result", async (context) => {
   if (!input.success) {
     return context.json({ error: "invalid_request", message: input.error.issues[0]?.message ?? "Invalid research result" }, 400);
   }
+  if (runnerIdentityMismatch(context, input.data.runnerId)) {
+    return context.json({ error: "runner_identity_mismatch", message: "This credential belongs to another runner." }, 403);
+  }
   return context.json(await completeResearchJob(database(context), context.req.param("jobId"), input.data));
 });
 
@@ -537,6 +623,9 @@ app.post("/api/runners/jobs/:jobId/fail", async (context) => {
   const input = failResearchJobInput.safeParse(body);
   if (!input.success) {
     return context.json({ error: "invalid_request", message: input.error.issues[0]?.message ?? "Invalid research failure" }, 400);
+  }
+  if (runnerIdentityMismatch(context, input.data.runnerId)) {
+    return context.json({ error: "runner_identity_mismatch", message: "This credential belongs to another runner." }, 403);
   }
   return context.json({ job: await failResearchJob(database(context), context.req.param("jobId"), input.data) });
 });
@@ -589,6 +678,10 @@ app.onError((error, context) => {
   }
 
   if (error instanceof PersonalRankingError) {
+    return context.json({ error: error.code, message: error.message }, error.status);
+  }
+
+  if (error instanceof RunnerCredentialError) {
     return context.json({ error: error.code, message: error.message }, error.status);
   }
 

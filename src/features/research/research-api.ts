@@ -51,6 +51,20 @@ export type RunnerStatus = {
   autoRun: boolean;
 };
 
+export type RunnerCredential = {
+  id: string;
+  deviceId: string;
+  runnerId: string;
+  name: string;
+  tokenHint: string;
+  metadata: Record<string, string>;
+  active: boolean;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type CreateResearchJob = {
   type: ResearchJobType;
   subject?: string;
@@ -134,6 +148,24 @@ export async function fetchRunnerStatus(token: string, signal?: AbortSignal): Pr
   if ("runner" in payload && payload.runner) return payload.runner;
   if ("status" in payload && typeof payload.status === "object" && payload.status) return payload.status;
   return payload as RunnerStatus;
+}
+
+export async function fetchRunnerCredentials(token: string, signal?: AbortSignal): Promise<RunnerCredential[]> {
+  const response = await fetch("/api/research/runner-credentials", {
+    headers: authHeaders(token),
+    signal,
+  });
+  if (!response.ok) throw await parseError(response);
+  const payload = await response.json() as { credentials?: RunnerCredential[] } | RunnerCredential[];
+  return Array.isArray(payload) ? payload : payload.credentials ?? [];
+}
+
+export async function revokeRunnerCredential(token: string, credentialId: string): Promise<void> {
+  const response = await fetch(`/api/research/runner-credentials/${encodeURIComponent(credentialId)}`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
+  if (!response.ok) throw await parseError(response);
 }
 
 export async function createResearchJob(token: string, input: CreateResearchJob): Promise<ResearchJob> {

@@ -7,6 +7,7 @@ import type {
 } from "../shared/contracts.js";
 import { IPC_CHANNELS } from "../shared/contracts.js";
 import { sanitizeSettingsPatch, type SecureConfigStore } from "./config-store.js";
+import { enrollRunnerDevice } from "./runner-enrollment.js";
 import type { RunnerController } from "./runner-controller.js";
 import { isTrustedRendererUrl } from "./security.js";
 
@@ -127,11 +128,43 @@ export function registerDesktopIpc(options: DesktopIpcOptions): () => void {
     if (args.length !== 1 || typeof args[0] !== "string") {
       throw new Error("A runner token string is required.");
     }
-    await options.config.setRunnerToken(args[0]);
+    const token = args[0].trim();
+    if (token.length < 32 || token.length > 4_096) {
+      throw new Error("The runner token must be between 32 and 4096 characters.");
+    }
+    await options.runner.resetCredential();
+    await options.config.setRunnerToken(token);
   });
   handle(IPC_CHANNELS.credentialsClearRunnerToken, async (_event, ...args) => {
     assertNoArguments(args);
+    await options.runner.resetCredential();
     await options.config.clearRunnerToken();
+  });
+  handle(IPC_CHANNELS.credentialsEnrollRunner, async (_event, ...args) => {
+    if (args.length !== 1 || !args[0] || typeof args[0] !== "object" || Array.isArray(args[0])) {
+      throw new Error("Runner enrollment requires an owner token and computer name.");
+    }
+    const input = args[0] as Record<string, unknown>;
+    const ownerToken = typeof input.ownerToken === "string" ? input.ownerToken.trim() : "";
+    const name = typeof input.name === "string" ? input.name.trim() : "";
+    if (ownerToken.length < 32 || ownerToken.length > 4_096) {
+      throw new Error("Enter a valid owner token.");
+    }
+    if (!name || name.length > 100) throw new Error("Computer name must be between 1 and 100 characters.");
+
+    // Finish any claimed job with its current credential before asking the API
+    // to issue or rotate this installation's credential.
+    await options.runner.resetCredential();
+    const installationId = options.config.getInstallationId();
+    const enrolled = await enrollRunnerDevice({
+      apiBaseUrl: options.config.getSettings().apiBaseUrl,
+      deviceId: installationId,
+      ownerToken,
+      name,
+    });
+    // Keep the one-time credential in the privileged process and encrypted at rest.
+    await options.config.setRunnerToken(enrolled.token);
+    return { device: enrolled.device };
   });
   handle(IPC_CHANNELS.schedulesOpen, (_event, ...args) => {
     assertNoArguments(args);

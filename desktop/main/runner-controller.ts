@@ -8,6 +8,8 @@ export interface RunnerController {
   stop(): Promise<RunnerStatus>;
   runNext(): Promise<RunnerStatus>;
   getLogs(limit: number): Promise<RunnerLogEntry[]>;
+  /** Stops polling and discards any controller that captured an old credential. */
+  resetCredential(): Promise<void>;
   onStatus(listener: (status: RunnerStatus) => void): () => void;
   onLog(listener: (entry: RunnerLogEntry) => void): () => void;
   dispose(): Promise<void>;
@@ -48,6 +50,8 @@ export class UnavailableRunnerController implements RunnerController {
   async getLogs(_limit: number): Promise<RunnerLogEntry[]> {
     return [];
   }
+
+  async resetCredential(): Promise<void> {}
 
   onStatus(_listener: (status: RunnerStatus) => void): () => void {
     return () => undefined;

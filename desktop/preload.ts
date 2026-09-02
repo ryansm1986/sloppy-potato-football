@@ -46,6 +46,10 @@ const desktopApi: SloppyPotatoDesktopApi = Object.freeze({
     hasRunnerToken: noArgs<boolean>(IPC_CHANNELS.credentialsHasRunnerToken),
     setRunnerToken: (token: string) => ipcRenderer.invoke(IPC_CHANNELS.credentialsSetRunnerToken, token),
     clearRunnerToken: noArgs<void>(IPC_CHANNELS.credentialsClearRunnerToken),
+    enrollRunner: (request: import("./shared/contracts.js").RunnerEnrollmentRequest) =>
+      ipcRenderer.invoke(IPC_CHANNELS.credentialsEnrollRunner, request) as Promise<
+        import("./shared/contracts.js").RunnerEnrollmentResult
+      >,
   }),
   schedules: Object.freeze({
     open: noArgs<void>(IPC_CHANNELS.schedulesOpen),

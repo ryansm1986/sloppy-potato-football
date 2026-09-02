@@ -8,6 +8,13 @@ const claimResponseSchema = z.object({ job: researchJobSchema.nullable() }).pass
 export type RunnerStatus = "idle" | "busy" | "stopping";
 export type Failure = { code: string; message: string; retryable: boolean };
 
+export class RunnerAuthenticationError extends Error {
+  constructor(readonly status: 401 | 403) {
+    super("Runner credential was rejected. Replace or remove it before reconnecting.");
+    this.name = "RunnerAuthenticationError";
+  }
+}
+
 type RequestOptions = {
   idempotencyKey?: string;
   retries?: number;
@@ -99,6 +106,9 @@ export class RunnerApiClient {
           signal,
         });
         if (!response.ok) {
+          if (response.status === 401 || response.status === 403) {
+            throw new RunnerAuthenticationError(response.status);
+          }
           const message = (await response.text()).slice(0, 1_000);
           const error = new Error(`Runner API ${path} returned HTTP ${response.status}: ${message}`);
           if (response.status < 500 && response.status !== 429) throw error;
@@ -109,6 +119,7 @@ export class RunnerApiClient {
         }
       } catch (error) {
         lastError = error;
+        if (error instanceof RunnerAuthenticationError) throw error;
         if (error instanceof Error && /HTTP 4\d\d/.test(error.message) && !/HTTP 429/.test(error.message)) throw error;
       }
       if (attempt < attempts) await new Promise((resolveDelay) => setTimeout(resolveDelay, 250 * 2 ** (attempt - 1)));

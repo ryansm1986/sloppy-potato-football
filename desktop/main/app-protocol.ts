@@ -60,12 +60,18 @@ async function proxyApiRequest(request: Request, apiBaseUrl: string): Promise<Re
 
   const method = request.method.toUpperCase();
   const body = method === "GET" || method === "HEAD" ? undefined : await request.arrayBuffer();
-  return net.fetch(target, {
+  const response = await net.fetch(target, {
     method,
     headers,
     body,
     redirect: "manual",
   });
+  // Never hand an upstream redirect back to the renderer: doing so could cause
+  // a privileged Authorization header to be replayed outside the configured API origin.
+  if (response.status >= 300 && response.status < 400) {
+    return new Response("The configured API returned an unsafe redirect.", { status: 502 });
+  }
+  return response;
 }
 
 export function installDesktopProtocol(options: DesktopProtocolOptions): void {

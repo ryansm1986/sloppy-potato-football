@@ -10,6 +10,11 @@ import type { RunnerLogEntry, RunnerStatus } from "../shared/contracts.js";
 import type { SecureConfigStore } from "./config-store.js";
 import type { RunnerController } from "./runner-controller.js";
 
+type CoreRunner = Pick<
+  CoreRunnerController,
+  "getSnapshot" | "start" | "resume" | "pauseAfterCurrentJob" | "runNextOnce" | "stop" | "waitUntilStopped" | "subscribe"
+>;
+
 export function mapCoreSnapshot(snapshot: RunnerControllerSnapshot, pauseRequested = false): RunnerStatus {
   const state: RunnerStatus["state"] = {
     stopped: "offline",
@@ -19,6 +24,7 @@ export function mapCoreSnapshot(snapshot: RunnerControllerSnapshot, pauseRequest
     offline: "offline",
     paused: "paused",
     stopping: "stopping",
+    error: "error",
   }[snapshot.phase] as RunnerStatus["state"];
 
   return {
@@ -26,6 +32,8 @@ export function mapCoreSnapshot(snapshot: RunnerControllerSnapshot, pauseRequest
     detail:
       snapshot.phase === "stopped"
         ? "Runner is stopped."
+        : snapshot.phase === "error"
+          ? "Runner credential was rejected. Replace or remove it to reconnect."
         : snapshot.phase === "offline"
           ? "The runner cannot currently reach the research service."
           : undefined,
@@ -41,10 +49,9 @@ export function mapCoreSnapshot(snapshot: RunnerControllerSnapshot, pauseRequest
   };
 }
 
-export function desktopRunnerId(machineName: string, installationId: string): string {
-  const machine = machineName.replace(/[^a-zA-Z0-9._-]/g, "-") || "windows";
+export function desktopRunnerId(_machineName: string, installationId: string): string {
   const installation = createHash("sha256").update(installationId).digest("hex").slice(0, 16);
-  return `desktop-${machine}-${installation}`.slice(0, 100);
+  return `desktop-${installation}`;
 }
 
 function mapLog(
@@ -61,7 +68,7 @@ function mapLog(
 
 /** Adapts the existing in-process runner without granting the renderer process access to it. */
 export class ExistingRunnerAdapter implements RunnerController {
-  private core: CoreRunnerController | null = null;
+  private core: CoreRunner | null = null;
   private unsubscribeCore: (() => void) | null = null;
   private readonly statusListeners = new Set<(status: RunnerStatus) => void>();
   private readonly logListeners = new Set<(entry: RunnerLogEntry) => void>();
@@ -72,6 +79,8 @@ export class ExistingRunnerAdapter implements RunnerController {
   constructor(
     private readonly config: SecureConfigStore,
     private readonly userDataDirectory: string,
+    private readonly createCore: (runnerConfig: RunnerConfig) => CoreRunner =
+      (runnerConfig) => new CoreRunnerController(runnerConfig),
   ) {}
 
   async getStatus(): Promise<RunnerStatus> {
@@ -126,6 +135,23 @@ export class ExistingRunnerAdapter implements RunnerController {
     return this.logEntries.slice(-limit).map((entry) => ({ ...entry }));
   }
 
+  async resetCredential(): Promise<void> {
+    const core = this.core;
+    if (!core) {
+      this.pauseRequested = false;
+      await this.emitCurrentStatus();
+      return;
+    }
+
+    const result = await core.stop();
+    if (result.deferredUntilCurrentJobFinishes) await core.waitUntilStopped();
+    this.unsubscribeCore?.();
+    this.unsubscribeCore = null;
+    this.core = null;
+    this.pauseRequested = false;
+    await this.emitCurrentStatus();
+  }
+
   onStatus(listener: (status: RunnerStatus) => void): () => void {
     this.statusListeners.add(listener);
     void this.getStatus().then(listener);
@@ -146,7 +172,12 @@ export class ExistingRunnerAdapter implements RunnerController {
     this.unsubscribeCore = null;
   }
 
-  private ensureCore(): CoreRunnerController {
+  private async emitCurrentStatus(): Promise<void> {
+    const status = await this.getStatus();
+    for (const listener of this.statusListeners) listener(status);
+  }
+
+  private ensureCore(): CoreRunner {
     if (this.core) return this.core;
     const token = this.config.getRunnerToken();
     if (!token) throw new Error("Add the desktop runner token in Settings before starting the runner.");
@@ -162,7 +193,7 @@ export class ExistingRunnerAdapter implements RunnerController {
       jobTimeoutMs: 240_000,
       httpTimeoutMs: 15_000,
     };
-    this.core = new CoreRunnerController(runnerConfig);
+    this.core = this.createCore(runnerConfig);
     this.unsubscribeCore = this.core.subscribe((snapshot) => this.handleSnapshot(snapshot));
     return this.core;
   }

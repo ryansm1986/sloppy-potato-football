@@ -1,6 +1,6 @@
 import type { RunnerConfig } from "./config.js";
 import { CodexExecutionError, executeCodexJob, type SpawnImplementation } from "./codex.js";
-import { RunnerApiClient } from "./api-client.js";
+import { RunnerApiClient, RunnerAuthenticationError } from "./api-client.js";
 import { acquireRunnerInstanceLock, type RunnerInstanceLock } from "./instance-lock.js";
 import { redact } from "./redact.js";
 import type { ResearchJob } from "./schemas.js";
@@ -67,6 +67,10 @@ export async function runForever(config: RunnerConfig, dependencies: RunnerDepen
         const processed = await runOneJob(config, { ...dependencies, api, log });
         if (processed) continue;
       } catch (error) {
+        if (error instanceof RunnerAuthenticationError) {
+          log(error.message);
+          break;
+        }
         log(`Polling warning: ${redact(error)}`);
       }
       await new Promise((resolveDelay) => setTimeout(resolveDelay, config.pollIntervalMs));
@@ -84,6 +88,7 @@ export type RunnerControllerPhase =
   | "idle"
   | "busy"
   | "offline"
+  | "error"
   | "paused"
   | "stopping";
 
@@ -148,6 +153,7 @@ export class RunnerController {
   private wakeLoop: (() => void) | null = null;
   private wakePending = false;
   private automatic = false;
+  private authenticationBlocked = false;
   private stopRequested = false;
   private manualRequest: { resolve: (processed: boolean) => void; reject: (error: unknown) => void } | null = null;
 
@@ -184,6 +190,7 @@ export class RunnerController {
     }
     const shouldWake = this.loopPromise !== null || this.initializationPromise !== null;
     this.automatic = true;
+    this.authenticationBlocked = false;
     await this.ensureLoop();
     if (shouldWake) this.wake();
   }
@@ -204,6 +211,7 @@ export class RunnerController {
     if (this.manualRequest) throw new Error("A run-next request is already pending.");
     if (this.stopRequested && (this.loopPromise || this.initializationPromise)) throw new Error("Runner is stopping.");
     this.automatic = false;
+    this.authenticationBlocked = false;
     await this.ensureLoop();
     return new Promise<boolean>((resolve, reject) => {
       this.manualRequest = { resolve, reject };
@@ -279,6 +287,11 @@ export class RunnerController {
 
   private async loop(): Promise<void> {
     while (!this.stopRequested) {
+      if (this.authenticationBlocked) {
+        this.setPhase("error");
+        await this.waitForWake();
+        continue;
+      }
       if (!this.automatic && !this.manualRequest) {
         this.setPhase("paused");
         await this.waitForWake();
@@ -313,7 +326,13 @@ export class RunnerController {
         if (isManualRun) this.finishManualRequest(processed);
         if (processed && this.automatic) continue;
       } catch (error) {
-        if (!isAbort(error)) {
+        if (error instanceof RunnerAuthenticationError) {
+          this.automatic = false;
+          this.authenticationBlocked = true;
+          this.setPhase("error");
+          this.record(error.message, "warning");
+          if (isManualRun) this.finishManualRequest(false);
+        } else if (!isAbort(error)) {
           this.setPhase("offline");
           this.record(`Polling warning: ${redact(error)}`, "warning");
           if (isManualRun) this.finishManualRequest(false);

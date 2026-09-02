@@ -45,6 +45,20 @@ export interface DesktopNavigationRequest {
   path: "/research" | "/research/schedules";
 }
 
+export interface RunnerDeviceSummary {
+  id: string;
+  name: string;
+}
+
+export interface RunnerEnrollmentRequest {
+  ownerToken: string;
+  name: string;
+}
+
+export interface RunnerEnrollmentResult {
+  device: RunnerDeviceSummary;
+}
+
 export const IPC_CHANNELS = {
   appInfo: "desktop:app-info",
   appShow: "desktop:app-show",
@@ -61,6 +75,7 @@ export const IPC_CHANNELS = {
   credentialsHasRunnerToken: "desktop:credentials-has-runner-token",
   credentialsSetRunnerToken: "desktop:credentials-set-runner-token",
   credentialsClearRunnerToken: "desktop:credentials-clear-runner-token",
+  credentialsEnrollRunner: "desktop:credentials-enroll-runner",
   schedulesOpen: "desktop:schedules-open",
   eventRunnerStatus: "desktop:event-runner-status",
   eventRunnerLog: "desktop:event-runner-log",
@@ -92,6 +107,7 @@ export interface SloppyPotatoDesktopApi {
     hasRunnerToken(): Promise<boolean>;
     setRunnerToken(token: string): Promise<void>;
     clearRunnerToken(): Promise<void>;
+    enrollRunner(request: RunnerEnrollmentRequest): Promise<RunnerEnrollmentResult>;
   };
   schedules: {
     open(): Promise<void>;

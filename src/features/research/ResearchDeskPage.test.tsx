@@ -30,11 +30,29 @@ const runner: RunnerStatus = {
   autoRun: true,
 };
 
+const runnerCredential = {
+  id: "credential-1",
+  deviceId: "install-1",
+  runnerId: "desktop-abc123",
+  name: "Kitchen desktop",
+  tokenHint: "spfr_1234...abcd",
+  metadata: { platform: "win32" },
+  active: true,
+  lastUsedAt: "2026-09-02T12:00:00.000Z",
+  revokedAt: null,
+  createdAt: "2026-09-01T12:00:00.000Z",
+  updatedAt: "2026-09-02T12:00:00.000Z",
+};
+
 function mockBridge(initialJobs: ResearchJob[] = [], runnerResponse = runner) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.startsWith("/api/rankings/snapshots")) return Response.json({ snapshots: [] });
     if (url === "/api/research/runner/status") return Response.json({ runner: runnerResponse });
+    if (url === `/api/research/runner-credentials/${runnerCredential.id}` && init?.method === "DELETE") {
+      return new Response(null, { status: 204 });
+    }
+    if (url === "/api/research/runner-credentials") return Response.json({ credentials: [runnerCredential] });
     if (url === "/api/research/schedules" && init?.method === "POST") {
       const body = JSON.parse(String(init.body));
       return Response.json({ schedule: {
@@ -285,5 +303,33 @@ describe("ResearchDeskPage", () => {
       expect.objectContaining({ method: "POST" }),
     ));
     expect(await screen.findByText("Research job returned to the queue.")).toBeInTheDocument();
+  });
+
+  it("lists and revokes a device-specific runner credential with confirmation", async () => {
+    window.localStorage.setItem(RESEARCH_OWNER_TOKEN_KEY, "owner-secret");
+    const fetchMock = mockBridge();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<MemoryRouter><ResearchDeskPage localDevelopmentOverride={false} /></MemoryRouter>);
+
+    expect(await screen.findByText("Kitchen desktop")).toBeInTheDocument();
+    expect(screen.getByText(/desktop-abc123/)).toBeInTheDocument();
+    expect(screen.getByText(/spfr_1234\.\.\.abcd/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Revoke Kitchen desktop" }));
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      `/api/research/runner-credentials/${runnerCredential.id}`,
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Confirm revoke Kitchen desktop" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      `/api/research/runner-credentials/${runnerCredential.id}`,
+      expect.objectContaining({
+        method: "DELETE",
+        headers: expect.objectContaining({ Authorization: "Bearer owner-secret" }),
+      }),
+    ));
+    expect(await screen.findByText(/Kitchen desktop was revoked/)).toBeInTheDocument();
+    expect(screen.getByText(/^Revoked ·/)).toBeInTheDocument();
   });
 });

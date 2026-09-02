@@ -66,7 +66,7 @@ void launchDesktopApp({
 
 The adapter uses the in-process service—there is no runner child process—and emits its bounded, redacted status/log events. `pauseAfterCurrent` stops claiming new jobs but allows the active job to publish its result. `stop` preserves that same no-abort guarantee for a claimed job.
 
-The desktop host starts the runner automatically when an encrypted runner token is present. Changing the API base URL after the in-process runner has started takes effect on the next application restart.
+The desktop host starts the runner automatically when an encrypted runner token is present. A rejected credential enters a terminal error state instead of retrying forever. Replace, enroll, and local-remove operations stop the old controller (finishing a claimed job first), discard it, and build the next controller from current encrypted state. Changing the API base URL after the in-process runner has started takes effect on the next application restart.
 
 The fallback `UnavailableRunnerController` remains available for tests and builds that intentionally disable local research.
 
@@ -85,7 +85,7 @@ Listen to `window.sloppyPotatoDesktop.navigation.onRequest` and route the suppli
 Build a desktop settings panel around:
 
 - `settings.get()` and `settings.update()` for close-to-tray, startup, notifications, and API endpoint preferences.
-- `credentials.hasRunnerToken()`, `setRunnerToken()`, and `clearRunnerToken()`. This is the `AGENT_RUNNER_TOKEN`, and there is deliberately no credential-read method.
+- `credentials.enrollRunner()`, `hasRunnerToken()`, `setRunnerToken()`, and `clearRunnerToken()`. Enrollment exchanges the memory-only owner token for a one-time device credential in the main process; there is deliberately no credential-read method. Manual token entry remains a recovery path.
 - `runner.start()`, `pauseAfterCurrent()`, `resume()`, `stop()`, `runNext()`, `status()`, and `logs()`.
 
 ## Security and release checklist

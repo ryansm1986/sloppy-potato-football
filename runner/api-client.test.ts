@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { RunnerApiClient } from "./api-client.js";
+import { RunnerApiClient, RunnerAuthenticationError } from "./api-client.js";
 import type { RunnerConfig } from "./config.js";
 
 const config: RunnerConfig = {
@@ -45,6 +45,20 @@ describe("RunnerApiClient", () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(response), { status: 200 }));
     const job = await new RunnerApiClient(config, fetchMock).claim();
     expect(job?.type).toBe("rankings_research");
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("treats a rejected credential as terminal without retrying or echoing the response", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(
+      "do not expose authentication response details",
+      { status: 401 },
+    ));
+
+    const error = await new RunnerApiClient(config, fetchMock).heartbeat("idle")
+      .catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(RunnerAuthenticationError);
+    expect(error).toMatchObject({ message: expect.stringContaining("Replace or remove") });
+    expect(String(error)).not.toContain("do not expose");
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 

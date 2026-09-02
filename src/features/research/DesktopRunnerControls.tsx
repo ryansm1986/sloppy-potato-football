@@ -1,4 +1,4 @@
-import { Bot, KeyRound, LoaderCircle, Pause, Play, Power, Settings2 } from "lucide-react";
+import { Bot, KeyRound, LoaderCircle, Pause, Play, Power, Settings2, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { DesktopSettings, RunnerLogEntry, RunnerStatus } from "../../../desktop/shared/contracts";
 
@@ -9,6 +9,10 @@ export default function DesktopRunnerControls() {
   const [settings, setSettings] = useState<DesktopSettings | null>(null);
   const [hasToken, setHasToken] = useState(false);
   const [tokenDraft, setTokenDraft] = useState("");
+  const [ownerTokenDraft, setOwnerTokenDraft] = useState("");
+  const [deviceName, setDeviceName] = useState("My fantasy football computer");
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -51,13 +55,54 @@ export default function DesktopRunnerControls() {
     if (!tokenDraft.trim()) return;
     setBusy("token");
     setError(null);
+    setNotice(null);
     try {
       await desktopApi.credentials.setRunnerToken(tokenDraft.trim());
       setTokenDraft("");
       setHasToken(true);
       setStatus(await desktopApi.runner.start());
+      setNotice("Runner credential replaced and polling restarted.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not secure the runner token.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function enrollRunner() {
+    if (!ownerTokenDraft.trim() || !deviceName.trim()) return;
+    setBusy("enroll");
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await desktopApi.credentials.enrollRunner({
+        ownerToken: ownerTokenDraft.trim(),
+        name: deviceName.trim(),
+      });
+      setOwnerTokenDraft("");
+      setHasToken(true);
+      setStatus(await desktopApi.runner.start());
+      setNotice(`${result.device.name} is enrolled and polling securely.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not enroll this computer.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function removeToken() {
+    setBusy("remove");
+    setError(null);
+    setNotice(null);
+    try {
+      await desktopApi.credentials.clearRunnerToken();
+      setHasToken(false);
+      setConfirmRemove(false);
+      setTokenDraft("");
+      setStatus(await desktopApi.runner.status());
+      setNotice("Runner credential removed from this computer.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not remove the runner credential.");
     } finally {
       setBusy(null);
     }
@@ -75,22 +120,37 @@ export default function DesktopRunnerControls() {
       <header><div className="research-callout__icon"><Bot size={18} /></div><div><p className="eyebrow">Desktop companion</p><h2>Runner Controls</h2></div><span className={`desktop-runner-state is-${state}`}>{state}</span></header>
       {!hasToken && (
         <div className="desktop-token-setup">
-          <p><KeyRound size={13} /> Add the scoped <code>AGENT_RUNNER_TOKEN</code> from your local <code>.env.runner</code>. It is encrypted with Windows DPAPI and cannot be read back by the page.</p>
-          <label><span className="sr-only">Desktop runner token</span><input aria-label="Desktop runner token" type="password" value={tokenDraft} onChange={(event) => setTokenDraft(event.target.value)} placeholder="Paste scoped runner token" /></label>
-          <button className="button button--primary" type="button" disabled={!tokenDraft.trim() || busy === "token"} onClick={() => { void saveToken(); }}>{busy === "token" ? <LoaderCircle className="spin" size={13} /> : <KeyRound size={13} />} Secure and start</button>
+          <p><KeyRound size={13} /> Enroll this computer with your owner token. The owner token stays in memory only; the new device credential is encrypted by Windows and is never shown to the page.</p>
+          <label><span>Computer name</span><input aria-label="Computer name" value={deviceName} maxLength={100} onChange={(event) => setDeviceName(event.target.value)} /></label>
+          <label><span>Owner token</span><input aria-label="Owner token" type="password" value={ownerTokenDraft} onChange={(event) => setOwnerTokenDraft(event.target.value)} placeholder="Paste RESEARCH_OWNER_TOKEN" autoComplete="off" /></label>
+          <button className="button button--primary" type="button" disabled={!ownerTokenDraft.trim() || !deviceName.trim() || busy !== null} onClick={() => { void enrollRunner(); }}>{busy === "enroll" ? <LoaderCircle className="spin" size={13} /> : <KeyRound size={13} />} Set up this computer</button>
+          <details className="desktop-manual-token"><summary>Use an existing runner token instead</summary><label><span>Runner token</span><input aria-label="Desktop runner token" type="password" value={tokenDraft} onChange={(event) => setTokenDraft(event.target.value)} placeholder="Paste scoped runner token" autoComplete="off" /></label><button type="button" disabled={!tokenDraft.trim() || busy !== null} onClick={() => { void saveToken(); }}>{busy === "token" ? <LoaderCircle className="spin" size={13} /> : <KeyRound size={13} />} Secure and start</button></details>
         </div>
       )}
       {hasToken && (
         <div className="desktop-runner-actions">
-          {(state === "offline" || state === "error" || state === "paused") && <button type="button" disabled={busy !== null} onClick={() => { void command("start", () => desktopApi.runner.start()); }}><Play size={13} /> Start</button>}
+          {(state === "offline" || state === "paused") && <button type="button" disabled={busy !== null} onClick={() => { void command("start", () => desktopApi.runner.start()); }}><Play size={13} /> Start</button>}
           {(state === "idle" || state === "running" || state === "starting") && <button type="button" disabled={busy !== null} onClick={() => { void command("pause", () => desktopApi.runner.pauseAfterCurrent()); }}><Pause size={13} /> Pause after job</button>}
-          <button type="button" disabled={busy !== null || state === "running"} onClick={() => { void command("next", () => desktopApi.runner.runNext()); }}><Play size={13} /> Run next</button>
-          <button type="button" disabled={busy !== null || state === "offline"} onClick={() => { void command("stop", () => desktopApi.runner.stop()); }}><Power size={13} /> Stop</button>
+          <button type="button" disabled={busy !== null || state === "running" || state === "error" || state === "starting" || state === "stopping"} onClick={() => { void command("next", () => desktopApi.runner.runNext()); }}><Play size={13} /> Run next</button>
+          <button type="button" disabled={busy !== null} onClick={() => { void command("stop", () => desktopApi.runner.stop()); }}><Power size={13} /> Stop polling</button>
         </div>
+      )}
+      {status?.detail && <p className={`desktop-runner-detail is-${state}`} role={state === "error" ? "alert" : undefined}>{status.detail}</p>}
+      {hasToken && (
+        <details className="desktop-credential-management" open={state === "error"}>
+          <summary>Runner credential</summary>
+          <div>
+            <p>A bad or expired token can always be replaced or removed, even while the runner is offline.</p>
+            <label><span>Replacement runner token</span><input aria-label="Replacement runner token" type="password" value={tokenDraft} onChange={(event) => setTokenDraft(event.target.value)} placeholder="Paste a new scoped runner token" autoComplete="off" /></label>
+            <button type="button" disabled={!tokenDraft.trim() || busy !== null} onClick={() => { void saveToken(); }}><KeyRound size={13} /> Replace and restart</button>
+            {!confirmRemove ? <button className="is-danger" type="button" disabled={busy !== null} onClick={() => setConfirmRemove(true)}><Trash2 size={13} /> Remove from this computer</button> : <div className="desktop-remove-confirm"><span>This stops the local runner and removes its saved token. It does not revoke the server credential.</span><button className="is-danger" type="button" disabled={busy !== null} onClick={() => { void removeToken(); }}>{busy === "remove" ? <LoaderCircle className="spin" size={13} /> : <Trash2 size={13} />} Remove locally</button><button type="button" disabled={busy !== null} onClick={() => setConfirmRemove(false)}>Cancel</button></div>}
+          </div>
+        </details>
       )}
       {status?.currentJob && <p className="desktop-current-job">Working: <strong>{status.currentJob.label}</strong></p>}
       {settings && <div className="desktop-settings"><span><Settings2 size={12} /> Desktop behavior</span><label><input type="checkbox" checked={settings.launchAtStartup} onChange={(event) => { void updateSetting({ launchAtStartup: event.target.checked }); }} /> Start with Windows</label><label><input type="checkbox" checked={settings.closeToTray} onChange={(event) => { void updateSetting({ closeToTray: event.target.checked }); }} /> Close to tray</label><label><input type="checkbox" checked={settings.notificationsEnabled} onChange={(event) => { void updateSetting({ notificationsEnabled: event.target.checked }); }} /> Notifications</label></div>}
       {logs.length > 0 && <details className="desktop-runner-logs"><summary>Recent runner activity</summary><ol>{logs.slice(-8).reverse().map((entry) => <li key={entry.id} className={`is-${entry.level}`}><time>{new Date(entry.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time><span>{entry.message}</span></li>)}</ol></details>}
+      {notice && <p className="desktop-runner-notice" role="status">{notice}</p>}
       {error && <p className="research-error" role="alert">{error}</p>}
     </section>
   );

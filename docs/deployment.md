@@ -40,4 +40,4 @@ Automatic migrations must be backward-compatible and additive. A destructive or 
 
 ## What is not automatic
 
-Runtime secrets such as `IMPORT_ADMIN_TOKEN`, Yahoo OAuth credentials, `AGENT_RUNNER_TOKEN`, and `RESEARCH_OWNER_TOKEN` remain Cloudflare Worker secrets. The workflow does not print or replace them. Run `pnpm bridge:setup` once on the trusted runner computer to configure the two research-bridge secrets and create the gitignored `.env.runner`; rotate them deliberately if that file is lost or exposed.
+Runtime secrets such as `IMPORT_ADMIN_TOKEN`, Yahoo OAuth credentials, `AGENT_RUNNER_TOKEN`, and `RESEARCH_OWNER_TOKEN` remain Cloudflare Worker secrets. The workflow does not print or replace them. Run `pnpm bridge:setup` once on a trusted computer to configure the bootstrap secrets and create the gitignored `.env.runner`. The first desktop enrollment permanently retires shared `AGENT_RUNNER_TOKEN` authentication in favor of hashed, revocable device credentials; manage those under **Connected Runners** in the Research Desk.

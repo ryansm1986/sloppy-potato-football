@@ -731,11 +731,28 @@ tbody tr:hover { background: rgba(255, 255, 255, .015); }
 .desktop-token-setup { display: grid; gap: 9px; padding: 13px; }
 .desktop-token-setup p { display: flex; align-items: flex-start; gap: 6px; margin: 0; color: var(--muted); font-size: 7px; line-height: 1.55; }
 .desktop-token-setup code { color: var(--amber); font-size: inherit; }
-.desktop-token-setup input { width: 100%; min-height: 36px; padding: 0 9px; color: var(--text); border: 1px solid var(--border); border-radius: 5px; background: #0d0e10; font-size: 8px; }
+.desktop-token-setup label, .desktop-credential-management label, .desktop-manual-token label { display: grid; gap: 5px; color: var(--subtle); font-size: 7px; font-weight: 800; }
+.desktop-token-setup input, .desktop-credential-management input, .desktop-manual-token input { width: 100%; min-height: 36px; padding: 0 9px; color: var(--text); border: 1px solid var(--border); border-radius: 5px; background: #0d0e10; font-size: 8px; }
+.desktop-manual-token { padding-top: 3px; border-top: 1px solid var(--border-soft); }
+.desktop-manual-token summary, .desktop-credential-management summary { padding: 8px 0; color: var(--subtle); font-size: 7px; font-weight: 800; cursor: pointer; }
+.desktop-manual-token[open] { display: grid; gap: 8px; }
 .desktop-runner-actions { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; padding: 12px; }
 .desktop-runner-actions button { min-height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; color: var(--muted); border: 1px solid var(--border); border-radius: 5px; background: #101114; font-size: 7px; font-weight: 800; cursor: pointer; }
 .desktop-runner-actions button:hover { color: var(--amber); border-color: var(--amber-dark); }
 .desktop-runner-actions button:disabled { opacity: .45; cursor: wait; }
+.desktop-runner-detail { margin: 0; padding: 0 12px 10px; color: var(--muted); font-size: 7px; line-height: 1.5; }
+.desktop-runner-detail.is-error { color: #ff9c9c; }
+.desktop-credential-management { border-top: 1px solid var(--border-soft); }
+.desktop-credential-management > summary { padding: 10px 12px; }
+.desktop-credential-management > div { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: end; gap: 8px; padding: 0 12px 12px; }
+.desktop-credential-management p { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 7px; line-height: 1.5; }
+.desktop-credential-management button, .desktop-manual-token button { min-height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 10px; color: var(--muted); border: 1px solid var(--border); border-radius: 5px; background: #101114; font-size: 7px; font-weight: 800; cursor: pointer; }
+.desktop-credential-management button:hover, .desktop-manual-token button:hover { color: var(--amber); border-color: var(--amber-dark); }
+.desktop-credential-management button.is-danger { color: #ff9c9c; border-color: rgba(255, 137, 137, .25); }
+.desktop-remove-confirm { grid-column: 1 / -1; display: flex; align-items: center; justify-content: flex-end; gap: 7px; color: var(--muted); font-size: 7px; }
+.desktop-remove-confirm span { margin-right: auto; }
+.desktop-runner-notice { margin: 0; padding: 9px 12px; color: var(--green); border-top: 1px solid var(--border-soft); font-size: 7px; }
+@media (max-width: 720px) { .desktop-credential-management > div { grid-template-columns: 1fr; } .desktop-remove-confirm { grid-column: auto; flex-wrap: wrap; } }
 .desktop-current-job { margin: 0; padding: 0 12px 12px; color: var(--muted); font-size: 7px; }
 .desktop-settings { display: grid; gap: 8px; padding: 11px 12px; border-top: 1px solid var(--border-soft); }
 .desktop-settings > span { display: flex; align-items: center; gap: 6px; color: var(--subtle); font-size: 7px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
@@ -758,6 +775,26 @@ tbody tr:hover { background: rgba(255, 255, 255, .015); }
 .owner-token-card > div { display: flex; gap: 6px; }
 .owner-token-card .button { min-height: 32px; padding-inline: 9px; font-size: 8px; }
 .owner-token-card > small { display: flex; align-items: center; gap: 5px; margin-top: 9px; color: var(--green); font-size: 7px; }
+
+.runner-devices > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 13px 14px; border-bottom: 1px solid var(--border); }
+.runner-devices > header h2 { margin: 0; font-family: "Anton", sans-serif; font-size: 16px; font-weight: 400; letter-spacing: .025em; text-transform: uppercase; }
+.runner-devices > header > span { color: var(--amber); font-size: 7px; text-transform: uppercase; }
+.runner-devices > article { display: flex; align-items: center; justify-content: space-between; gap: 9px; padding: 11px 14px; border-bottom: 1px solid var(--border); }
+.runner-devices > article.is-revoked { opacity: .58; }
+.runner-devices__identity { display: grid; min-width: 0; gap: 3px; }
+.runner-devices__identity strong { overflow: hidden; color: var(--text); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.runner-devices__identity span { color: var(--green); font-size: 7px; }
+.runner-devices .is-revoked .runner-devices__identity span { color: var(--muted); }
+.runner-devices__identity small { overflow: hidden; color: var(--muted); font-size: 6px; text-overflow: ellipsis; white-space: nowrap; }
+.runner-devices button { min-height: 28px; padding: 0 8px; color: var(--text); border: 1px solid var(--border); border-radius: 4px; background: #17191b; font: inherit; font-size: 7px; cursor: pointer; }
+.runner-devices button.is-danger { color: #ff9b92; border-color: rgba(239, 68, 68, .35); }
+.runner-devices button:disabled { opacity: .45; cursor: not-allowed; }
+.runner-devices__confirm { display: grid; flex: 0 0 108px; gap: 4px; }
+.runner-devices__confirm span { color: var(--muted); font-size: 6px; line-height: 1.35; }
+.runner-devices__empty { display: flex; align-items: center; gap: 8px; padding: 14px; color: var(--muted); }
+.runner-devices__empty p { margin: 0; font-size: 7px; line-height: 1.5; }
+.runner-devices__note { display: flex; align-items: flex-start; gap: 6px; margin: 0; padding: 10px 14px; color: var(--muted); font-size: 6px; line-height: 1.5; }
+.runner-devices__note svg { flex: 0 0 auto; color: var(--amber); }
 .spin { animation: spin 900ms linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 

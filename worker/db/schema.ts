@@ -461,6 +461,33 @@ export const researchRunners = sqliteTable(
   (table) => [index("research_runners_last_seen_idx").on(table.lastSeenAt, table.status)],
 );
 
+export const runnerCredentials = sqliteTable(
+  "runner_credentials",
+  {
+    id: text("id").primaryKey(),
+    ownerIdentity: text("owner_identity").notNull(),
+    deviceId: text("device_id").notNull(),
+    runnerId: text("runner_id").notNull(),
+    name: text("name").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    tokenHint: text("token_hint").notNull(),
+    metadataJson: text("metadata_json").notNull().default("{}"),
+    lastUsedAt: integer("last_used_at", { mode: "timestamp_ms" }),
+    revokedAt: integer("revoked_at", { mode: "timestamp_ms" }),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().default(nowMs),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull().default(nowMs),
+  },
+  (table) => [
+    uniqueIndex("runner_credentials_owner_device_unique").on(table.ownerIdentity, table.deviceId),
+    uniqueIndex("runner_credentials_owner_runner_unique").on(table.ownerIdentity, table.runnerId),
+    uniqueIndex("runner_credentials_token_hash_unique").on(table.tokenHash),
+    index("runner_credentials_owner_created_idx").on(table.ownerIdentity, table.createdAt, table.id),
+    index("runner_credentials_active_token_idx")
+      .on(table.tokenHash)
+      .where(sql`${table.revokedAt} IS NULL`),
+  ],
+);
+
 export const researchJobs = sqliteTable(
   "research_jobs",
   {

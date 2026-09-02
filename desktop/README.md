@@ -10,7 +10,8 @@ Implemented shell behavior:
 - sandboxed renderer, denied permission requests, restricted navigation, and typed IPC;
 - DPAPI-backed runner-token persistence through Electron `safeStorage`;
 - job-completion/error notifications; and
-- an in-process adapter for the existing Codex runner, activated only after a valid encrypted runner token is provided.
+- one-click, owner-authorized per-device enrollment whose one-time token is encrypted by Windows DPAPI;
+- an in-process adapter for the existing Codex runner with terminal bad-token recovery and safe replace/remove controls.
 
 Once configured, the runner starts with the desktop host so cloud-scheduled work can be picked up while the app remains in the tray.
 
