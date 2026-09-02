@@ -24,6 +24,7 @@ function makeSnapshot(id: string, overrides: SnapshotOverrides = {}): AgentRanki
     rankingType: overrides.rankingType ?? "redraft",
     season: overrides.season ?? "2026",
     week: overrides.week === undefined ? null : overrides.week,
+    leagueSize: overrides.leagueSize,
     positionScope: overrides.positionScope,
     generatedAt: overrides.generatedAt ?? "2026-09-01T12:00:00.000Z",
     createdAt: overrides.createdAt,
@@ -79,7 +80,18 @@ describe("ranking aggregation", () => {
 
     const result = aggregateRankingSnapshots([wrongScoring, wrongType, wrongSeason, wrongWeek, compatible, anchor]);
     expect(result?.sourceSnapshots.map((snapshot) => snapshot.id)).toEqual(["anchor", "compatible"]);
-    expect(result?.scope).toEqual({ scoringFormat: "ppr", rankingType: "redraft", season: "2026", week: 2, positionScope: "ALL" });
+    expect(result?.scope).toEqual({ scoringFormat: "ppr", rankingType: "redraft", season: "2026", week: 2, positionScope: "ALL", leagueSize: 12 });
+  });
+
+  it("keeps league sizes in separate aggregate scopes and derived snapshots", () => {
+    const twelveTeam = makeSnapshot("twelve", { source: { canonicalKey: "expert:a" }, leagueSize: 12, generatedAt: "2026-09-02T00:00:00Z" });
+    const fourteenTeam = makeSnapshot("fourteen", { source: { canonicalKey: "expert:b" }, leagueSize: 14, generatedAt: "2026-09-01T00:00:00Z" });
+
+    const result = aggregateRankingSnapshots([fourteenTeam, twelveTeam]);
+    expect(result?.sourceSnapshots.map((snapshot) => snapshot.id)).toEqual(["twelve"]);
+    expect(result?.scope.leagueSize).toBe(12);
+    expect(result?.snapshot.leagueSize).toBe(12);
+    expect(result?.snapshot.source.canonicalKey).toContain("12team");
   });
 
   it("keeps a source's compatible overall board when it also has a newer position-only board", () => {

@@ -157,6 +157,7 @@ describe("ResearchDeskPage", () => {
       subject: "Bijan Robinson",
       scoringFormat: "ppr",
       rankingType: "redraft",
+      leagueSize: 12,
     });
     expect(String(init.body)).not.toContain("prompt");
   });
@@ -185,6 +186,27 @@ describe("ResearchDeskPage", () => {
 
     fireEvent.change(limit, { target: { value: "501" } });
     expect(screen.getByRole("button", { name: /queue research/i })).toBeDisabled();
+  });
+
+  it("shares the selected league size and submits it for every assignment type", async () => {
+    window.localStorage.setItem(RESEARCH_OWNER_TOKEN_KEY, "owner-secret");
+    const fetchMock = mockBridge();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<MemoryRouter><ResearchDeskPage localDevelopmentOverride={false} /></MemoryRouter>);
+
+    const leagueSize = screen.getByLabelText("League size");
+    expect(leagueSize).toHaveValue("12");
+    fireEvent.change(leagueSize, { target: { value: "14" } });
+    fireEvent.change(screen.getByLabelText("Player name"), { target: { value: "CeeDee Lamb" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: /queue research/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: /queue research/i }));
+
+    await waitFor(() => {
+      const createCall = fetchMock.mock.calls.find(([url, init]) => url === "/api/research/jobs" && init?.method === "POST");
+      expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({ leagueSize: 14 });
+    });
+    expect(window.localStorage.getItem("spff:league-size:v1")).toBe("14");
+    expect(fetchMock).toHaveBeenCalledWith("/api/rankings/snapshots?limit=100&leagueSize=14", expect.anything());
   });
 
   it("allows ranking research to opt out of scouting new publishers", async () => {

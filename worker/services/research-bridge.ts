@@ -6,6 +6,7 @@ import {
   discardPendingRankingSnapshots,
   loadAllKnownRankingSourceDomains,
   publishRankingSnapshots,
+  rankingLeagueSize,
   rankingSnapshotInput,
   snapshotKnownRankingSourceDomains,
 } from "./ranking-snapshots";
@@ -41,7 +42,7 @@ export const createResearchJobInput = z.object({
   season: z.string().regex(/^20\d{2}$/).optional(),
   week: z.number().int().min(1).max(25).optional(),
   rankingLimit: z.number().int().min(1).max(500).optional(),
-  leagueSize: z.number().int().min(4).max(20).optional(),
+  leagueSize: rankingLeagueSize.optional().default(12),
   sleepersPerPosition: z.number().int().min(1).max(20).optional(),
   discoverNewSources: z.boolean().optional().default(false),
 }).superRefine((value, context) => {
@@ -63,7 +64,7 @@ export const createResearchJobInput = z.object({
   rankingLimit: value.type === "source_refresh" || value.type === "rankings_research"
     ? value.rankingLimit ?? 100
     : undefined,
-  leagueSize: value.type === "sleepers_research" ? value.leagueSize ?? 12 : undefined,
+  leagueSize: value.leagueSize,
   sleepersPerPosition: value.type === "sleepers_research" ? value.sleepersPerPosition ?? 8 : undefined,
   discoverNewSources: value.type === "sleepers_research" || value.type === "rankings_research"
     ? value.discoverNewSources
@@ -217,7 +218,7 @@ function toPublicJob(row: ResearchJobRow) {
     season: input.season ?? null,
     week: input.week ?? null,
     rankingLimit: input.rankingLimit ?? null,
-    leagueSize: input.leagueSize ?? null,
+    leagueSize: input.leagueSize ?? 12,
     sleepersPerPosition: input.sleepersPerPosition ?? null,
     discoverNewSources: input.discoverNewSources ?? false,
     newPublisherCount: row.new_publisher_count,
@@ -236,7 +237,7 @@ function toPublicJob(row: ResearchJobRow) {
 
 function executionContext(row: ResearchJobRow) {
   const input = parseJson<ResearchTaskInput>(row.task_input_json, {} as never);
-  const scope = `${input.scoringFormat ?? "ppr"} ${input.rankingType ?? "redraft"}, ${input.position ?? "ALL"}, season ${input.season ?? new Date().getUTCFullYear()}`;
+  const scope = `${input.leagueSize ?? 12}-team ${input.scoringFormat ?? "ppr"} ${input.rankingType ?? "redraft"}, ${input.position ?? "ALL"}, season ${input.season ?? new Date().getUTCFullYear()}`;
   const rankingLimit = input.rankingLimit ?? 100;
   switch (row.job_type) {
     case "source_refresh":
@@ -477,10 +478,11 @@ export async function claimResearchJob(db: Database, runnerId: string) {
   ).bind(candidate.id, now, now, runnerId).run();
   await insertEvent(db, candidate.id, "claimed", "runner", runnerId, { leaseExpiresAt: iso(leaseExpiresAt) });
   const job = (await findJob(db, candidate.id))!;
+  const claimedInput = parseJson<ResearchTaskInput>(job.task_input_json, {} as never);
   return {
     id: job.id,
     type: job.job_type,
-    input: parseJson(job.task_input_json, {}),
+    input: { ...claimedInput, leagueSize: claimedInput.leagueSize ?? 12 },
     attempt: job.attempt_count,
     maxAttempts: job.max_attempts,
     leaseToken,
@@ -582,6 +584,7 @@ export async function completeResearchJob(db: Database, jobId: string, input: z.
       delete fields.externalRunId;
       delete fields.generatedAt;
       delete fields.positionScope;
+      delete fields.leagueSize;
       delete fields.sourceName;
       delete fields.sourceUrl;
       const slug = sourceSlug(rawSnapshot.sourceName, `rankings-source-${index + 1}`);
@@ -609,6 +612,7 @@ export async function completeResearchJob(db: Database, jobId: string, input: z.
         generatedAt,
         externalRunId: `research-job:${jobId}:${index + 1}`,
         positionScope: taskInput.position ?? "ALL",
+        leagueSize: taskInput.leagueSize ?? 12,
       });
       assertPositionCoverage(snapshot.entries, taskInput.position ?? "ALL");
       snapshotsToCreate.push(snapshot);
@@ -627,6 +631,7 @@ export async function completeResearchJob(db: Database, jobId: string, input: z.
     delete snapshotFields.externalRunId;
     delete snapshotFields.generatedAt;
     delete snapshotFields.positionScope;
+    delete snapshotFields.leagueSize;
     delete snapshotFields.sourceName;
     delete snapshotFields.sourceUrl;
     const snapshot = rankingSnapshotInput.parse({
@@ -651,6 +656,7 @@ export async function completeResearchJob(db: Database, jobId: string, input: z.
       generatedAt,
       externalRunId: `research-job:${jobId}`,
       positionScope: taskInput.position ?? "ALL",
+      leagueSize: taskInput.leagueSize ?? 12,
     });
     assertPositionCoverage(snapshot.entries, taskInput.position ?? "ALL");
     snapshotsToCreate.push(snapshot);

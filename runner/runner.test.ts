@@ -25,7 +25,7 @@ const config: RunnerConfig = {
 const job: ResearchJob = {
   id: "job-123",
   type: "player_research",
-  input: { type: "player_research", subject: "Justin Jefferson", scoringFormat: "ppr", rankingType: "redraft", position: "WR" },
+  input: { type: "player_research", subject: "Justin Jefferson", scoringFormat: "ppr", rankingType: "redraft", position: "WR", leagueSize: 12 },
   attempt: 1,
   maxAttempts: 3,
   leaseToken: "f1f2d93e-50c6-41a9-a108-6c9ed8d12845",

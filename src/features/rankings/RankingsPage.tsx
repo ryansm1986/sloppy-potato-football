@@ -46,6 +46,14 @@ import {
 import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
 import { NavLink } from "react-router";
 import {
+  DEFAULT_LEAGUE_SIZE,
+  LEAGUE_SIZE_OPTIONS,
+  loadLeagueSize,
+  normalizeLeagueSize,
+  saveLeagueSize,
+  type LeagueSize,
+} from "../league-size";
+import {
   fetchResearchJobs,
   RESEARCH_OWNER_TOKEN_KEY,
   type ResearchJob,
@@ -366,6 +374,7 @@ function AgentSnapshotPanel({
   onToggleAggregateSource,
   onRestoreAggregateSources,
   onApply,
+  leagueSize,
 }: {
   snapshots: AgentRankingSnapshot[];
   loading: boolean;
@@ -381,6 +390,7 @@ function AgentSnapshotPanel({
   onToggleAggregateSource: (sourceKey: string) => void;
   onRestoreAggregateSources: (sourceKeys: string[]) => void;
   onApply: (snapshot: AgentRankingSnapshot, position: string) => void;
+  leagueSize: LeagueSize;
 }) {
   const [selectedSourceKey, setSelectedSourceKey] = useState("aggregate");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -522,7 +532,7 @@ function AgentSnapshotPanel({
 
       {collapsed ? (
         <div className="agent-collapsed-summary">
-          <span>{snapshots.length} snapshot{snapshots.length === 1 ? "" : "s"}</span>
+          <span>{snapshots.length} snapshot{snapshots.length === 1 ? "" : "s"} · {leagueSize} teams</span>
           <span>{favoriteSourceKeys.length} favorite source{favoriteSourceKeys.length === 1 ? "" : "s"}</span>
         </div>
       ) : <>
@@ -538,7 +548,7 @@ function AgentSnapshotPanel({
         <div className="agent-empty">
           <Sparkles size={22} />
           <h3>No agent snapshots yet</h3>
-          <p>The ingestion endpoint is ready. Completed ranking research will appear here without changing your board.</p>
+          <p>No {leagueSize}-team snapshots yet. Completed ranking research will appear here without changing your board.</p>
           <NavLink className="button button--secondary" to="/research">Open Research Desk</NavLink>
         </div>
       )}
@@ -623,7 +633,7 @@ function AgentSnapshotPanel({
             </div>
             <div className="snapshot-scope">
               <span><Clock3 size={13} /> {relativeTime(selected.generatedAt)}</span>
-              <span>{selected.scoringFormat.toUpperCase()} · {selected.rankingType.replaceAll("_", " ")} · {selected.season}</span>
+              <span>{normalizeLeagueSize(selected.leagueSize)} teams · {selected.scoringFormat.toUpperCase()} · {selected.rankingType.replaceAll("_", " ")} · {selected.season}</span>
             </div>
           </div>
           {selected.summary && !aggregateHasNoIncludedSources && <p className="snapshot-summary">{selected.summary}</p>}
@@ -726,6 +736,8 @@ export default function RankingsPage() {
   const [query, setQuery] = useState("");
   const [position, setPosition] = useState<(typeof positions)[number]>("ALL");
   const [announcement, setAnnouncement] = useState("");
+  const [leagueSize, setLeagueSize] = useState<LeagueSize>(() =>
+    typeof window === "undefined" ? DEFAULT_LEAGUE_SIZE : loadLeagueSize(window.localStorage));
   const [snapshots, setSnapshots] = useState<AgentRankingSnapshot[]>([]);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [snapshotsLoading, setSnapshotsLoading] = useState(true);
@@ -758,9 +770,10 @@ export default function RankingsPage() {
 
   useEffect(() => {
     const controller = new AbortController();
+    setSnapshots([]);
     void loadAgentSnapshots(controller.signal);
     return () => controller.abort();
-  }, []);
+  }, [leagueSize]);
 
   useEffect(() => {
     if (!ownerToken) return;
@@ -785,7 +798,8 @@ export default function RankingsPage() {
     setSnapshotsLoading(true);
     setSnapshotError(null);
     try {
-      setSnapshots(await fetchAgentRankings(signal));
+      const nextSnapshots = await fetchAgentRankings(signal, leagueSize);
+      setSnapshots(nextSnapshots.filter((snapshot) => normalizeLeagueSize(snapshot.leagueSize) === leagueSize));
     } catch (error: unknown) {
       if (error instanceof DOMException && error.name === "AbortError") return;
       setSnapshotError(error instanceof Error ? error.message : "Unknown ranking error");
@@ -952,6 +966,7 @@ export default function RankingsPage() {
         onToggleAggregateSource={toggleSourceInAggregate}
         onRestoreAggregateSources={restoreAggregateSources}
         onApply={requestAgentOrder}
+        leagueSize={leagueSize}
       />
     </section>
   );
@@ -973,7 +988,21 @@ export default function RankingsPage() {
           <p className="page-header__copy">Build your private board and review agent-found rankings without mixing the two.</p>
         </div>
         <div className="page-header__actions">
-          <span className="badge badge--amber">PPR Redraft</span>
+          <label className="league-size-control">
+            <span>League size</span>
+            <select
+              aria-label="Rankings league size"
+              value={leagueSize}
+              onChange={(event) => {
+                const next = normalizeLeagueSize(event.target.value);
+                setLeagueSize(next);
+                saveLeagueSize(window.localStorage, next);
+              }}
+            >
+              {LEAGUE_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size} teams</option>)}
+            </select>
+          </label>
+          <span className="badge badge--amber">{leagueSize}-team PPR Redraft</span>
           <button className="button button--secondary save-board" type="button" onClick={saveBoard}><Check size={14} /> Save my rankings</button>
           <span className="autosave-state">{savedAt ? `Saved ${savedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "Not saved"}</span>
         </div>
@@ -983,7 +1012,7 @@ export default function RankingsPage() {
         <div><span>Players ranked</span><strong>{rankings.length}</strong></div>
         <div><span>Your biggest reach</span><strong>{Math.max(...rankings.map((player, index) => player.consensusRank - index - 1), 0)} spots</strong></div>
         <div><span>Agent snapshots</span><strong>{snapshots.length}</strong></div>
-        <div><span>Board scope</span><strong>Overall · Draft</strong></div>
+        <div><span>Board scope</span><strong>{leagueSize}-team · Overall · Draft</strong></div>
       </section>
 
       <section className="workspace-controls panel" aria-label="Rankings workspace layout">

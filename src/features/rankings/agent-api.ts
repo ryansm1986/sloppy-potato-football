@@ -20,6 +20,7 @@ export type AgentRankingSnapshot = {
   rankingType: string;
   season: string;
   week: number | null;
+  leagueSize?: number;
   positionScope?: string;
   sourceUrl?: string | null;
   generatedAt: string;
@@ -34,8 +35,10 @@ export type AgentRankingSnapshot = {
   entries: AgentRankingEntry[];
 };
 
-export async function fetchAgentRankings(signal?: AbortSignal): Promise<AgentRankingSnapshot[]> {
-  const response = await fetch("/api/rankings/snapshots?limit=100", {
+export async function fetchAgentRankings(signal?: AbortSignal, leagueSize?: number): Promise<AgentRankingSnapshot[]> {
+  const params = new URLSearchParams({ limit: "100" });
+  if (leagueSize !== undefined) params.set("leagueSize", String(leagueSize));
+  const response = await fetch(`/api/rankings/snapshots?${params.toString()}`, {
     headers: { Accept: "application/json" },
     signal,
   });

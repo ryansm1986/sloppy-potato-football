@@ -30,6 +30,7 @@ describe("agent ranking snapshots", () => {
     const db = drizzle(env.DB, { schema });
     const input = rankingSnapshotInput.parse(snapshotInput);
     expect(input.positionScope).toBe("ALL");
+    expect(input.leagueSize).toBe(12);
     const first = await createRankingSnapshot(db, input);
     const retry = await createRankingSnapshot(db, input);
     expect(first.created).toBe(true);
@@ -40,6 +41,7 @@ describe("agent ranking snapshots", () => {
     expect(snapshots[0].source.name).toBe("Codex Rank Agent");
     expect(snapshots[0].source.attributionUrl).toBeNull();
     expect(snapshots[0].positionScope).toBe("ALL");
+    expect(snapshots[0].leagueSize).toBe(12);
     expect(snapshots[0].entries.map((entry) => entry.playerName)).toEqual(["Bijan Robinson", "Ja'Marr Chase"]);
     expect(snapshots[0].entries[0].team).toBe("ATL");
   });
@@ -237,5 +239,61 @@ describe("agent ranking snapshots", () => {
       { DB: env.DB },
     );
     expect(response.status).toBe(400);
+  });
+
+  it("stores and filters independent league-size ranking scopes", async () => {
+    const db = drizzle(env.DB, { schema });
+    const suffix = crypto.randomUUID().slice(0, 8);
+    const source = {
+      canonicalKey: `external:league-scope-${suffix}`,
+      slug: `league-scope-${suffix}`,
+      name: `League Scope ${suffix}`,
+      kind: "external" as const,
+      attributionUrl: "https://league-scope.example/rankings",
+    };
+    const twelve = await createRankingSnapshot(db, rankingSnapshotInput.parse({
+      ...snapshotInput,
+      source,
+      externalRunId: `league-12-${suffix}`,
+      season: "2095",
+      leagueSize: 12,
+      title: "Twelve team board",
+    }));
+    const ten = await createRankingSnapshot(db, rankingSnapshotInput.parse({
+      ...snapshotInput,
+      source,
+      externalRunId: `league-10-${suffix}`,
+      season: "2095",
+      leagueSize: 10,
+      title: "Ten team board",
+    }));
+
+    const tenTeam = await getRankingSnapshots(db, 10, {
+      scoringFormat: "ppr",
+      rankingType: "redraft",
+      season: "2095",
+      week: null,
+      position: "ALL",
+      leagueSize: 10,
+      latestPerSource: true,
+    });
+    expect(tenTeam.map((snapshot) => snapshot.id)).toEqual([ten.id]);
+    expect(tenTeam[0]?.leagueSize).toBe(10);
+
+    const twelveTeam = await app.request(
+      "https://potato.example/api/rankings/snapshots?scoringFormat=ppr&rankingType=redraft&season=2095&week=null&position=ALL&leagueSize=12&latestPerSource=true&limit=10",
+      undefined,
+      { DB: env.DB },
+    );
+    expect(twelveTeam.status).toBe(200);
+    expect((await twelveTeam.json<{ snapshots: Array<{ id: string; leagueSize: number }> }>()).snapshots)
+      .toEqual([expect.objectContaining({ id: twelve.id, leagueSize: 12 })]);
+
+    const invalid = await app.request(
+      "https://potato.example/api/rankings/snapshots?leagueSize=11",
+      undefined,
+      { DB: env.DB },
+    );
+    expect(invalid.status).toBe(400);
   });
 });

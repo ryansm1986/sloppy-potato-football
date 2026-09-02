@@ -9,6 +9,9 @@ const jobTypeSchema = z.enum(["source_refresh", "player_research", "rankings_res
 const scoringFormatSchema = z.enum(["ppr", "half_ppr", "standard"]);
 const rankingTypeSchema = z.enum(["redraft", "weekly", "rest_of_season", "dynasty", "rookie"]);
 const positionSchema = z.enum(["ALL", "QB", "RB", "WR", "TE", "K", "DST"]);
+const leagueSizeSchema = z.union([
+  z.literal(8), z.literal(10), z.literal(12), z.literal(14), z.literal(16),
+]);
 
 const commonMultiLabelPublicSuffixes = new Set([
   "ac.uk", "co.uk", "gov.uk", "me.uk", "net.uk", "org.uk",
@@ -38,7 +41,7 @@ export const researchJobInputSchema = z.object({
   season: z.string().regex(/^20\d{2}$/).optional(),
   week: z.number().int().min(1).max(25).optional(),
   rankingLimit: z.number().int().min(1).max(500).optional(),
-  leagueSize: z.number().int().min(4).max(20).optional(),
+  leagueSize: leagueSizeSchema.optional().default(12),
   sleepersPerPosition: z.number().int().min(1).max(20).optional(),
   discoverNewSources: z.boolean().optional(),
   knownSourceDomains: z.array(z.string().trim().toLowerCase().min(1).max(253)
@@ -73,6 +76,7 @@ const rankingSnapshotSchema = z.object({
   rankingType: rankingTypeSchema,
   season: z.string().regex(/^20\d{2}$/),
   week: z.number().int().min(1).max(25).nullable(),
+  leagueSize: leagueSizeSchema.optional(),
   summary: z.string().trim().max(1_500).nullable(),
   methodology: z.string().trim().max(2_000).nullable(),
   entries: z.array(rankingEntrySchema).min(1).max(500),

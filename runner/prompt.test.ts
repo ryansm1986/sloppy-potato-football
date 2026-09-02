@@ -12,6 +12,7 @@ const job: ResearchJob = {
     rankingType: "redraft",
     position: "WR",
     season: "2026",
+    leagueSize: 12,
   },
   attempt: 1,
   maxAttempts: 3,
@@ -26,6 +27,7 @@ describe("buildResearchPrompt", () => {
     expect(prompt).toContain("BEGIN SERVER-VALIDATED ASSIGNMENT DATA");
     expect(prompt).toContain("Justin Jefferson");
     expect(prompt).toContain("Do not run repository code");
+    expect(prompt).toContain("League size: 12-team league");
     expect(prompt.length).toBeLessThanOrEqual(8_000);
     expect(prompt).not.toContain(job.leaseToken);
   });
@@ -47,6 +49,7 @@ describe("buildResearchPrompt", () => {
         position: "ALL",
         season: "2026",
         rankingLimit: 200,
+        leagueSize: 14,
       },
       executionContext: "Return the requested Top 200 fantasy-football rankings.",
     });
@@ -57,6 +60,8 @@ describe("buildResearchPrompt", () => {
     expect(prompt).toContain("distinct reputable publishers with distinct domains");
     expect(prompt).toContain("ALL never means a quarterback-only list");
     expect(prompt).toContain("app computes the aggregate");
+    expect(prompt).toContain("League size: 14-team league");
+    expect(prompt).toContain("never adjust its ranks for league size");
     expect(prompt.length).toBeLessThanOrEqual(8_000);
   });
 
@@ -71,6 +76,7 @@ describe("buildResearchPrompt", () => {
         position: "ALL",
         season: "2026",
         rankingLimit: 100,
+        leagueSize: 10,
         discoverNewSources: true,
         knownSourceDomains: ["fantasypros.com", "espn.com"],
       },

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import RankingsPage from "./RankingsPage";
@@ -87,6 +87,34 @@ describe("RankingsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(within(personal).getByText("Bijan Robinson")).toBeInTheDocument();
+  });
+
+  it("loads and persists league-sized ranking boards without mixing snapshots", async () => {
+    const fourteenTeamSnapshot = {
+      ...agentSnapshot,
+      id: "snapshot-14-team",
+      title: "14-team PPR Refresh",
+      leagueSize: 14,
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      return Response.json({ snapshots: url.includes("leagueSize=14") ? [fourteenTeamSnapshot] : [agentSnapshot] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<MemoryRouter><RankingsPage /></MemoryRouter>);
+
+    const selector = screen.getByLabelText("Rankings league size");
+    expect(selector).toHaveValue("12");
+    expect(await screen.findByText(/12 teams · PPR · redraft · 2026/i)).toBeInTheDocument();
+    fireEvent.change(selector, { target: { value: "14" } });
+
+    expect(await screen.findByText(/14 teams · PPR · redraft · 2026/i)).toBeInTheDocument();
+    expect(screen.getByText("14-team · Overall · Draft")).toBeInTheDocument();
+    expect(window.localStorage.getItem("spff:league-size:v1")).toBe("14");
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/rankings/snapshots?limit=100&leagueSize=14",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    ));
   });
 
   it("persists favorite sources and agent workspace layout choices", async () => {

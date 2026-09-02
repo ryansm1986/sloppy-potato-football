@@ -99,8 +99,20 @@ describe("research runner bridge", () => {
       sharedBindings,
     );
     expect(create200.status).toBe(201);
-    const created200 = await create200.json<{ job: { id: string; rankingLimit: number } }>();
+    const created200 = await create200.json<{ job: { id: string; rankingLimit: number; leagueSize: number } }>();
     expect(created200.job.rankingLimit).toBe(200);
+    expect(created200.job.leagueSize).toBe(12);
+    // Simulate an in-flight job stored before league size became part of every
+    // task. Public and runner contracts must continue to expose a 12-team scope.
+    await env.DB.prepare(
+      "UPDATE research_jobs SET task_input_json = json_remove(task_input_json, '$.leagueSize') WHERE id = ?",
+    ).bind(created200.job.id).run();
+    const legacyPublic = await app.request(
+      `https://potato.example/api/research/jobs/${created200.job.id}`,
+      jsonRequest("GET"),
+      sharedBindings,
+    );
+    expect((await legacyPublic.json<{ job: { leagueSize: number } }>()).job.leagueSize).toBe(12);
 
     const claim = await app.request(
       "https://potato.example/api/runners/jobs/claim",
@@ -109,9 +121,11 @@ describe("research runner bridge", () => {
     );
     expect(claim.status).toBe(200);
     const claimed = (await claim.json<{ job: {
-      id: string; leaseToken: string; input: { rankingLimit: number }; executionContext: string;
+      id: string; leaseToken: string; input: { rankingLimit: number; leagueSize: number }; executionContext: string;
     } }>()).job;
     expect(claimed.input.rankingLimit).toBe(200);
+    expect(claimed.input.leagueSize).toBe(12);
+    expect(claimed.executionContext).toContain("12-team");
     expect(claimed.executionContext).toContain("requested Top 200");
     expect(claimed.executionContext).toContain("exactly 200 contiguous entries");
 
@@ -171,6 +185,17 @@ describe("research runner bridge", () => {
       sharedBindings,
     );
     expect(create501.status).toBe(400);
+
+    const unsupportedLeague = await app.request(
+      "https://potato.example/api/research/jobs",
+      jsonRequest("POST", {
+        type: "player_research",
+        subject: "Bijan Robinson",
+        leagueSize: 11,
+      }, "owner-secret", { "Idempotency-Key": `league-11-${suffix}` }),
+      sharedBindings,
+    );
+    expect(unsupportedLeague.status).toBe(400);
   });
 
   it("leases a source refresh, normalizes its source, ingests its snapshot, and completes idempotently", async () => {
@@ -187,12 +212,14 @@ describe("research runner bridge", () => {
         rankingType: "redraft",
         position: "RB",
         season: "2026",
+        leagueSize: 14,
       }, "owner-secret", { "Idempotency-Key": `refresh-${suffix}` }),
       sharedBindings,
     );
     expect(create.status).toBe(201);
-    const created = await create.json<{ job: { id: string; status: string } }>();
+    const created = await create.json<{ job: { id: string; status: string; leagueSize: number } }>();
     expect(created.job.status).toBe("queued");
+    expect(created.job.leagueSize).toBe(14);
 
     const duplicate = await app.request(
       "https://potato.example/api/research/jobs",
@@ -212,12 +239,15 @@ describe("research runner bridge", () => {
     expect(claim.status).toBe(200);
     const claimed = (await claim.json<{ job: {
       id: string; leaseToken: string; leaseExpiresAt: string; executionContext: string; attempt: number; maxAttempts: number;
+      input: { leagueSize: number };
     } }>()).job;
     expect(claimed.id).toBe(created.job.id);
     expect(claimed.attempt).toBe(1);
     expect(claimed.maxAttempts).toBe(3);
     expect(Date.parse(claimed.leaseExpiresAt) - Date.now()).toBeGreaterThan(14 * 60_000);
     expect(claimed.executionContext).toContain("FantasyPros");
+    expect(claimed.executionContext).toContain("14-team");
+    expect(claimed.input.leagueSize).toBe(14);
 
     const repeatedClaim = await app.request(
       "https://potato.example/api/runners/jobs/claim",
@@ -245,6 +275,7 @@ describe("research runner bridge", () => {
           title: "FantasyPros PPR refresh",
           scoringFormat: "ppr",
           rankingType: "redraft",
+          leagueSize: 8,
           season: "2026",
           summary: "A current source refresh.",
           entries: [
@@ -266,10 +297,10 @@ describe("research runner bridge", () => {
     expect(completed.rankingSnapshotId).toBeTruthy();
 
     const source = await env.DB.prepare(
-      `SELECT rs.canonical_key, rs.name, rs.kind, rs.attribution_url, sn.external_run_id, sn.position_scope
+      `SELECT rs.canonical_key, rs.name, rs.kind, rs.attribution_url, sn.external_run_id, sn.position_scope, sn.league_size
        FROM ranking_sources rs JOIN ranking_snapshots sn ON sn.source_id = rs.id WHERE sn.id = ?`,
     ).bind(completed.rankingSnapshotId).first<{
-      canonical_key: string; name: string; kind: string; attribution_url: string; external_run_id: string; position_scope: string;
+      canonical_key: string; name: string; kind: string; attribution_url: string; external_run_id: string; position_scope: string; league_size: number;
     }>();
     expect(source).toMatchObject({
       canonical_key: "external:fantasypros",
@@ -278,6 +309,7 @@ describe("research runner bridge", () => {
       attribution_url: "https://www.fantasypros.com/nfl/rankings/ppr-cheatsheets.php",
       external_run_id: `research-job:${created.job.id}`,
       position_scope: "RB",
+      league_size: 14,
     });
 
     const retryCompletion = await app.request(
@@ -302,6 +334,7 @@ describe("research runner bridge", () => {
         position: "ALL",
         season: "2026",
         rankingLimit: 100,
+        leagueSize: 16,
       }, "owner-secret", { "Idempotency-Key": `multi-source-${suffix}` }),
       sharedBindings,
     );
@@ -329,6 +362,7 @@ describe("research runner bridge", () => {
       title: `${source.sourceName} rankings`,
       scoringFormat: "standard",
       rankingType: "dynasty",
+      leagueSize: 8,
       season: "2025",
       week: null,
       summary: null,
@@ -380,20 +414,20 @@ describe("research runner bridge", () => {
 
     const stored = await env.DB.prepare(
       `SELECT rs.name, rs.kind, rs.attribution_url, sn.scoring_format, sn.ranking_type,
-              sn.season, sn.position_scope, sn.external_run_id
+              sn.season, sn.position_scope, sn.league_size, sn.external_run_id
        FROM ranking_snapshots sn
        JOIN ranking_sources rs ON rs.id = sn.source_id
        WHERE sn.id IN (SELECT value FROM json_each(?))
        ORDER BY sn.external_run_id`,
     ).bind(JSON.stringify(completed.rankingSnapshotIds)).all<{
       name: string; kind: string; attribution_url: string; scoring_format: string;
-      ranking_type: string; season: string; position_scope: string; external_run_id: string;
+      ranking_type: string; season: string; position_scope: string; league_size: number; external_run_id: string;
     }>();
     expect(stored.results).toHaveLength(3);
     expect(stored.results.map((row) => row.kind)).toEqual(["external", "external", "external"]);
     expect(stored.results.map((row) => row.attribution_url)).toEqual(rankingSnapshots.map((snapshot) => snapshot.sourceUrl));
     expect(stored.results.every((row) => row.scoring_format === "ppr" && row.ranking_type === "redraft"
-      && row.season === "2026" && row.position_scope === "ALL")).toBe(true);
+      && row.season === "2026" && row.position_scope === "ALL" && row.league_size === 16)).toBe(true);
 
     const retry = await app.request(
       `https://potato.example/api/runners/jobs/${jobId}/result`,

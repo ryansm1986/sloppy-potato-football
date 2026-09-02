@@ -25,6 +25,14 @@ import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react
 import { useSearchParams } from "react-router";
 import { fetchAgentRankings, type AgentRankingSnapshot } from "../rankings/agent-api";
 import {
+  DEFAULT_LEAGUE_SIZE,
+  LEAGUE_SIZE_OPTIONS,
+  loadLeagueSize,
+  normalizeLeagueSize,
+  saveLeagueSize,
+  type LeagueSize,
+} from "../league-size";
+import {
   createResearchJob,
   fetchResearchJobs,
   fetchRunnerStatus,
@@ -108,6 +116,7 @@ function SnapshotResult({ snapshot }: { snapshot: AgentRankingSnapshot }) {
         </div>
         <footer>
           <span><Bot size={13} /> {snapshot.source.name}</span>
+          <span>{normalizeLeagueSize(snapshot.leagueSize)}-team league</span>
           {snapshot.discoverNewSources && (
             <span className="ranking-discovery-count"><Telescope size={13} /> Latest scout: {snapshot.newPublisherCount ? `${snapshot.newPublisherCount} new ${snapshot.newPublisherCount === 1 ? "publisher" : "publishers"}` : "no new publishers"}</span>
           )}
@@ -133,6 +142,8 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
   const [source, setSource] = useState(favoriteSource);
   const [position, setPosition] = useState<"ALL" | "QB" | "RB" | "WR" | "TE">("ALL");
   const [rankingLimit, setRankingLimit] = useState(100);
+  const [leagueSize, setLeagueSize] = useState<LeagueSize>(() =>
+    typeof window === "undefined" ? DEFAULT_LEAGUE_SIZE : loadLeagueSize(window.localStorage));
   const [discoverNewSources, setDiscoverNewSources] = useState(true);
   const [jobs, setJobs] = useState<ResearchJob[]>([]);
   const [runner, setRunner] = useState<RunnerStatus | null>(null);
@@ -183,9 +194,12 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
 
   useEffect(() => {
     const controller = new AbortController();
-    fetchAgentRankings(controller.signal).then(setSnapshots).catch(() => undefined);
+    setSnapshots([]);
+    fetchAgentRankings(controller.signal, leagueSize)
+      .then((nextSnapshots) => setSnapshots(nextSnapshots.filter((snapshot) => normalizeLeagueSize(snapshot.leagueSize) === leagueSize)))
+      .catch(() => undefined);
     return () => controller.abort();
-  }, []);
+  }, [leagueSize]);
 
   useEffect(() => {
     if (!canAttemptAccess) return;
@@ -233,6 +247,7 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
         type: jobType,
         scoringFormat: "ppr",
         rankingType: "redraft",
+        leagueSize,
         ...(jobType === "player_research" ? { subject: subject.trim() } : {}),
         ...(jobType === "source_refresh" ? { sourceName: source.trim() } : {}),
         ...(jobType === "rankings_research" ? { position } : {}),
@@ -296,6 +311,22 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
                   </label>
                 ))}
               </fieldset>
+
+              <label className="research-field research-field--compact research-league-size">
+                <span>League size</span>
+                <select
+                  aria-label="League size"
+                  value={leagueSize}
+                  onChange={(event) => {
+                    const next = normalizeLeagueSize(event.target.value);
+                    setLeagueSize(next);
+                    saveLeagueSize(window.localStorage, next);
+                  }}
+                >
+                  {LEAGUE_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size} teams</option>)}
+                </select>
+                <small>Shared with Rankings Center. Research is scoped to this league size.</small>
+              </label>
 
               {jobType === "player_research" && (
                 <label className="research-field">
@@ -379,7 +410,7 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
                 <JobStatusIcon status={job.status} />
                 <div>
                   <strong>{job.sourceName || job.subject || `${job.position ?? "ALL"} PPR rankings`}</strong>
-                  <span>{JOB_TYPE_LABELS[job.type]}{job.rankingLimit ? ` · Top ${job.rankingLimit}` : ""} · {JOB_STATUS_LABELS[job.status]} · {formatRelativeDate(job.updatedAt || job.createdAt)}</span>
+                  <span>{JOB_TYPE_LABELS[job.type]}{job.rankingLimit ? ` · Top ${job.rankingLimit}` : ""} · {normalizeLeagueSize(job.leagueSize)} teams · {JOB_STATUS_LABELS[job.status]} · {formatRelativeDate(job.updatedAt || job.createdAt)}</span>
                   {job.error && <small>{job.error}</small>}
                 </div>
                 {job.status === "failed" && <button type="button" onClick={() => void retry(job.id)} disabled={retryingId === job.id} aria-label={`Retry ${job.sourceName || job.subject || "research job"}`}><RefreshCw className={retryingId === job.id ? "spin" : ""} size={13} /></button>}

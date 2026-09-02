@@ -32,6 +32,7 @@ export type ResearchJob = {
   rankingType: string;
   position: string | null;
   rankingLimit?: number | null;
+  leagueSize?: number;
   createdAt: string;
   updatedAt: string;
   startedAt: string | null;

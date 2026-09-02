@@ -1,7 +1,9 @@
 import type { AgentRankingEntry, AgentRankingSnapshot } from "./agent-api";
+import { normalizeLeagueSize } from "../league-size";
 
 export type RankingScope = Pick<AgentRankingSnapshot, "scoringFormat" | "rankingType" | "season" | "week"> & {
   positionScope: string;
+  leagueSize: number;
 };
 
 export type AggregateSourceRank = {
@@ -62,6 +64,7 @@ export function rankingScopeOf(snapshot: AgentRankingSnapshot): RankingScope {
     rankingType: snapshot.rankingType,
     season: snapshot.season,
     week: snapshot.week,
+    leagueSize: normalizeLeagueSize(snapshot.leagueSize),
     positionScope: snapshot.positionScope ?? (entryPositions.length === 1 ? entryPositions[0]! : "ALL"),
   };
 }
@@ -71,6 +74,7 @@ export function isSnapshotInScope(snapshot: AgentRankingSnapshot, scope: Ranking
     && snapshot.rankingType === scope.rankingType
     && snapshot.season === scope.season
     && snapshot.week === scope.week
+    && normalizeLeagueSize(snapshot.leagueSize) === scope.leagueSize
     && rankingScopeOf(snapshot).positionScope === scope.positionScope;
 }
 
@@ -93,7 +97,7 @@ function stableHash(value: string): string {
 }
 
 function scopeKey(scope: RankingScope): string {
-  return [scope.scoringFormat, scope.rankingType, scope.season, scope.week ?? "season", scope.positionScope].join(":");
+  return [scope.scoringFormat, scope.rankingType, scope.season, scope.week ?? "season", scope.positionScope, `${scope.leagueSize}team`].join(":");
 }
 
 type MutableAggregate = {
@@ -217,6 +221,7 @@ export function aggregateRankingSnapshots(
     rankingType: scope.rankingType,
     season: scope.season,
     week: scope.week,
+    leagueSize: scope.leagueSize,
     positionScope: scope.positionScope,
     generatedAt: anchor.generatedAt,
     summary: `Arithmetic mean of ${sourceSnapshots.length} unique ranking source${sourceSnapshots.length === 1 ? "" : "s"}.`,

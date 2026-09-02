@@ -38,6 +38,7 @@ export function buildResearchPrompt(job: ResearchJob): string {
     `Subject: ${input.subject ? normalize(input.subject, 200) : "None"}`,
     `Source: ${input.sourceName ? normalize(input.sourceName, 200) : "None"}`,
     `Scope: ${input.scoringFormat}; ${input.rankingType}; ${input.position}; season ${input.season ?? "current"}; week ${input.week ?? "not specified"}`,
+    `League size: ${input.leagueSize ?? 12}-team league. Use league size for source applicability, list depth, and insight context. For source_refresh and rankings_research, preserve each publisher's published order exactly and never adjust its ranks for league size.`,
     ...(job.type === "sleepers_research" ? [
       `Sleeper settings: ${input.leagueSize ?? 12}-team league; up to ${input.sleepersPerPosition ?? 8} candidates per position.`,
       `Sleeper source discovery: ${input.discoverNewSources ? "enabled" : "disabled"}.`,

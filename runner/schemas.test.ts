@@ -75,6 +75,50 @@ describe("multi-source research result", () => {
   });
 });
 
+describe("league-size validation", () => {
+  const claimed = {
+    id: "13cb54a1-85eb-4e7e-bfb5-cc25cf712b7e",
+    type: "player_research",
+    input: {
+      type: "player_research",
+      subject: "Bijan Robinson",
+      scoringFormat: "ppr",
+      rankingType: "redraft",
+      position: "RB",
+    },
+    attempt: 1,
+    maxAttempts: 3,
+    leaseToken: "f1f2d93e-50c6-41a9-a108-6c9ed8d12845",
+    leaseExpiresAt: "2026-09-01T22:00:00.000Z",
+    executionContext: "Research the named player.",
+  };
+
+  it("defaults legacy claimed jobs to 12 teams and accepts supported sizes", () => {
+    expect(researchJobSchema.parse(claimed).input.leagueSize).toBe(12);
+    for (const leagueSize of [8, 10, 12, 14, 16]) {
+      expect(researchJobSchema.parse({
+        ...claimed,
+        input: { ...claimed.input, leagueSize },
+      }).input.leagueSize).toBe(leagueSize);
+    }
+  });
+
+  it("rejects unsupported job and ranking-result league sizes", () => {
+    expect(researchJobSchema.safeParse({
+      ...claimed,
+      input: { ...claimed.input, leagueSize: 11 },
+    }).success).toBe(false);
+    expect(researchResultSchema.safeParse({
+      ...baseResult,
+      rankingSnapshots: [
+        { ...source("FantasyPros", "https://fantasypros.com/rankings"), leagueSize: 11 },
+        source("RotoWire", "https://rotowire.com/football/rankings"),
+        source("CBS Sports", "https://cbssports.com/fantasy/football/rankings"),
+      ],
+    }).success).toBe(false);
+  });
+});
+
 describe("sleeper research result", () => {
   it("accepts only a bounded canonical-domain snapshot on claimed discovery jobs", () => {
     const claimed = {

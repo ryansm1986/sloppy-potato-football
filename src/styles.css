@@ -345,6 +345,9 @@ tbody tr:hover { background: rgba(255, 255, 255, .015); }
 
 .rankings-page, .research-page { max-width: 1480px; }
 .rankings-header { align-items: center; }
+.league-size-control { display: flex; flex-direction: column; gap: 4px; color: var(--subtle); font-size: 7px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.league-size-control select { min-width: 104px; height: 30px; padding: 0 28px 0 9px; color: var(--text); border: 1px solid var(--border); border-radius: 5px; outline: 0; background: #101114; color-scheme: dark; font: inherit; font-size: 9px; font-weight: 700; letter-spacing: 0; text-transform: none; }
+.league-size-control select:focus-visible { border-color: rgba(245, 158, 11, .65); box-shadow: 0 0 0 2px rgba(245, 158, 11, .1); }
 .autosave-state { display: inline-flex; align-items: center; gap: 6px; color: var(--green); font-size: 9px; font-weight: 700; }
 .save-board { white-space: nowrap; }
 
@@ -589,6 +592,7 @@ tbody tr:hover { background: rgba(255, 255, 255, .015); }
 .research-field select { max-width: 240px; color-scheme: dark; }
 .research-field input:focus, .research-field select:focus, .owner-token-card input:focus { border-color: rgba(245, 158, 11, .6); box-shadow: 0 0 0 2px rgba(245, 158, 11, .1); }
 .research-field small { color: var(--subtle); font-size: 8px; line-height: 1.5; }
+.research-league-size { margin-bottom: 14px; padding: 10px; border: 1px solid rgba(245, 158, 11, .18); border-radius: 6px; background: rgba(245, 158, 11, .035); }
 .source-scout-toggle { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 9px; align-items: start; margin-top: 12px; padding: 10px; color: var(--text); border: 1px solid var(--border-soft); border-radius: 6px; background: #101114; cursor: pointer; }
 .source-scout-toggle > input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
 .source-scout-toggle__control { position: relative; width: 30px; height: 17px; margin-top: 1px; border: 1px solid var(--border); border-radius: 999px; background: #292b30; transition: border-color .15s ease, background .15s ease; }

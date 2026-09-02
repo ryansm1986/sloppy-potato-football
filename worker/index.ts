@@ -265,6 +265,7 @@ app.get("/api/rankings/snapshots", async (context) => {
     ? Math.min(Math.max(Math.trunc(requestedLimit), 1), 100)
     : 5;
   const weekValue = context.req.query("week");
+  const leagueSizeValue = context.req.query("leagueSize");
   const latestPerSourceValue = context.req.query("latestPerSource");
   const query = rankingSnapshotQueryInput.safeParse({
     scoringFormat: context.req.query("scoringFormat"),
@@ -272,6 +273,7 @@ app.get("/api/rankings/snapshots", async (context) => {
     season: context.req.query("season"),
     week: weekValue === undefined ? undefined : weekValue === "null" ? null : Number(weekValue),
     position: context.req.query("position"),
+    leagueSize: leagueSizeValue === undefined ? undefined : Number(leagueSizeValue),
     source: context.req.query("source"),
     latestPerSource: latestPerSourceValue === undefined
       ? undefined

@@ -44,6 +44,9 @@ const entryInput = z.object({
 });
 
 export const rankingPositionScope = z.enum(["ALL", "QB", "RB", "WR", "TE", "K", "DST"]);
+export const rankingLeagueSize = z.union([
+  z.literal(8), z.literal(10), z.literal(12), z.literal(14), z.literal(16),
+]);
 
 export const rankingSnapshotInput = z.object({
   source: sourceInput,
@@ -54,6 +57,7 @@ export const rankingSnapshotInput = z.object({
   season: z.string().regex(/^20\d{2}$/),
   week: z.number().int().min(1).max(25).nullish(),
   positionScope: rankingPositionScope.optional().default("ALL"),
+  leagueSize: rankingLeagueSize.optional().default(12),
   generatedAt: z.string().datetime({ offset: true }),
   summary: z.string().trim().max(1_500).nullish(),
   methodology: z.string().trim().max(2_000).nullish(),
@@ -151,9 +155,9 @@ export async function createRankingSnapshot(
     db.$client.prepare(
       `INSERT INTO ranking_snapshots (
          id, source_id, external_run_id, title, scoring_format, ranking_type, season,
-         week, position_scope, status, generated_at, summary, methodology, research_job_id,
+         week, position_scope, league_size, status, generated_at, summary, methodology, research_job_id,
          source_url, discover_new_sources, is_new_discovery, new_publisher_count, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(
       snapshotId,
       sourceId,
@@ -164,6 +168,7 @@ export async function createRankingSnapshot(
       input.season,
       input.week ?? null,
       input.positionScope,
+      input.leagueSize,
       discovery ? "pending" : "completed",
       new Date(input.generatedAt).getTime(),
       input.summary ?? null,
@@ -286,6 +291,7 @@ export const rankingSnapshotQueryInput = z.object({
   season: z.string().regex(/^20\d{2}$/).optional(),
   week: z.number().int().min(1).max(25).nullable().optional(),
   position: rankingPositionScope.optional(),
+  leagueSize: rankingLeagueSize.optional(),
   source: z.string().trim().min(1).max(128).optional(),
   latestPerSource: z.boolean().optional().default(false),
 });
@@ -308,6 +314,7 @@ export async function getRankingSnapshots(db: Database, limit: number, query: Ra
     else addFilter("sn.week", parsedQuery.week);
   }
   if (parsedQuery.position) addFilter("sn.position_scope", parsedQuery.position);
+  if (parsedQuery.leagueSize) addFilter("sn.league_size", parsedQuery.leagueSize);
   if (parsedQuery.source) {
     clauses.push("(rs.canonical_key = ? OR rs.slug = ? OR rs.id = ?)");
     bindings.push(parsedQuery.source, parsedQuery.source, parsedQuery.source);
@@ -347,6 +354,7 @@ export async function getRankingSnapshots(db: Database, limit: number, query: Ra
       season: rankingSnapshots.season,
       week: rankingSnapshots.week,
       positionScope: rankingSnapshots.positionScope,
+      leagueSize: rankingSnapshots.leagueSize,
       generatedAt: rankingSnapshots.generatedAt,
       createdAt: rankingSnapshots.createdAt,
       summary: rankingSnapshots.summary,
@@ -394,6 +402,7 @@ export async function getRankingSnapshots(db: Database, limit: number, query: Ra
     season: snapshot.season,
     week: snapshot.week,
     positionScope: snapshot.positionScope,
+    leagueSize: snapshot.leagueSize,
     generatedAt: snapshot.generatedAt,
     createdAt: snapshot.createdAt,
     savedAt: snapshot.createdAt,
