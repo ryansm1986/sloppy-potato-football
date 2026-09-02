@@ -1,7 +1,6 @@
 import { EventEmitter } from "node:events";
 import { writeFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -12,7 +11,10 @@ import type { SpawnImplementation } from "./codex.js";
 import { RunnerController, runOneJob, type RunnerControllerPhase } from "./runner.js";
 import type { ResearchJob } from "./schemas.js";
 
-const workspace = join(tmpdir(), `sloppy-potato-runner-test-${process.pid}`);
+// GitHub Actions may point the OS temp directory inside the checkout. The
+// production runner correctly rejects that unsafe layout, so keep the test
+// workspace explicitly beside (and never within) the repository.
+const workspace = join(dirname(process.cwd()), `sloppy-potato-runner-test-${process.pid}`);
 const config: RunnerConfig = {
   apiUrl: "https://example.test",
   token: "runner-secret-that-must-not-reach-codex".padEnd(48, "x"),
