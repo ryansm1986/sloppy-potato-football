@@ -24,6 +24,8 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronUp,
+  CircleMinus,
+  CirclePlus,
   Clock3,
   Columns2,
   ExternalLink,
@@ -63,6 +65,7 @@ import {
   MIN_RANKINGS_SPLIT_RATIO,
   loadRankingsPreferences,
   saveRankingsPreferences,
+  toggleAggregateSource,
   toggleFavoriteSource,
   type RankingsPreferences,
 } from "./ranking-preferences";
@@ -354,11 +357,14 @@ function AgentSnapshotPanel({
   error,
   collapsed,
   favoriteSourceKeys,
+  excludedAggregateSourceKeys,
   researchByPlayer,
   hasOwnerToken,
   onCollapsedChange,
   onRefresh,
   onToggleFavorite,
+  onToggleAggregateSource,
+  onRestoreAggregateSources,
   onApply,
 }: {
   snapshots: AgentRankingSnapshot[];
@@ -366,11 +372,14 @@ function AgentSnapshotPanel({
   error: string | null;
   collapsed: boolean;
   favoriteSourceKeys: string[];
+  excludedAggregateSourceKeys: string[];
   researchByPlayer: Map<string, ResearchJob>;
   hasOwnerToken: boolean;
   onCollapsedChange: (collapsed: boolean) => void;
   onRefresh: () => void;
   onToggleFavorite: (sourceSlug: string) => void;
+  onToggleAggregateSource: (sourceKey: string) => void;
+  onRestoreAggregateSources: (sourceKeys: string[]) => void;
   onApply: (snapshot: AgentRankingSnapshot, position: string) => void;
 }) {
   const [selectedSourceKey, setSelectedSourceKey] = useState("aggregate");
@@ -379,10 +388,14 @@ function AgentSnapshotPanel({
   const [listPosition, setListPosition] = useState("ALL");
   const [playerNameFilter, setPlayerNameFilter] = useState("");
   const [displayCount, setDisplayCount] = useState("50");
-  const aggregate = useMemo(() => aggregateRankingSnapshots(snapshots), [snapshots]);
+  const fullAggregate = useMemo(() => aggregateRankingSnapshots(snapshots), [snapshots]);
+  const aggregate = useMemo(
+    () => aggregateRankingSnapshots(snapshots, excludedAggregateSourceKeys),
+    [excludedAggregateSourceKeys, snapshots],
+  );
   const scopedSnapshots = useMemo(
-    () => aggregate ? snapshots.filter((snapshot) => isSnapshotInScope(snapshot, aggregate.scope)) : snapshots,
-    [aggregate, snapshots],
+    () => fullAggregate ? snapshots.filter((snapshot) => isSnapshotInScope(snapshot, fullAggregate.scope)) : snapshots,
+    [fullAggregate, snapshots],
   );
   const latestBySource = useMemo(() => selectLatestSnapshotPerSource(scopedSnapshots), [scopedSnapshots]);
   const selectedSource = latestBySource.find((snapshot) => snapshot.source.canonicalKey === selectedSourceKey);
@@ -445,6 +458,13 @@ function AgentSnapshotPanel({
     && snapshot.researchJobId === discoverySnapshot.researchJobId
     && snapshot.isNewDiscovery,
   );
+  const aggregateSourceKeys = useMemo(
+    () => new Set(fullAggregate?.sourceSnapshots.map((snapshot) => snapshot.source.canonicalKey) ?? []),
+    [fullAggregate],
+  );
+  const includedSourceCount = aggregate?.sourceSnapshots.length ?? 0;
+  const totalSourceCount = fullAggregate?.sourceSnapshots.length ?? 0;
+  const aggregateHasNoIncludedSources = selectedSourceKey === "aggregate" && totalSourceCount > 0 && includedSourceCount === 0;
 
   useEffect(() => {
     setSelectedId(null);
@@ -529,7 +549,7 @@ function AgentSnapshotPanel({
             <label>
               <span>Ranking source</span>
               <select value={selectedSourceKey} onChange={(event) => selectSourceKey(event.target.value)}>
-                {aggregate && <option value="aggregate">Aggregate · {aggregate.sourceSnapshots.length} source{aggregate.sourceSnapshots.length === 1 ? "" : "s"}</option>}
+                {aggregate && <option value="aggregate">Aggregate · {includedSourceCount}/{totalSourceCount} source{totalSourceCount === 1 ? "" : "s"}</option>}
                 {[...latestBySource]
                   .sort((left, right) => left.source.name.localeCompare(right.source.name))
                   .map((snapshot) => (
@@ -538,7 +558,7 @@ function AgentSnapshotPanel({
               </select>
             </label>
             <div className="agent-source-toolbar__context">
-              <small>Switch between the combined board and each preserved source.</small>
+              <small>Select a source name to view it. The circle controls aggregate membership; the star saves a favorite.</small>
               {discoverySnapshot && (
                 <span className="ranking-discovery-count"><Telescope size={11} /> Latest scout: {newPublisherCount ? `${newPublisherCount} new ${newPublisherCount === 1 ? "publisher" : "publishers"}` : "no new publishers"}</span>
               )}
@@ -552,7 +572,7 @@ function AgentSnapshotPanel({
                 aria-pressed={selectedSourceKey === "aggregate"}
                 onClick={() => { setSelectedSourceKey("aggregate"); setSelectedId(null); }}
               >
-                <Sparkles size={12} /> Aggregate
+                <Sparkles size={12} /> Aggregate {includedSourceCount}/{totalSourceCount}
               </button>
             )}
             {[...latestBySource]
@@ -560,12 +580,27 @@ function AgentSnapshotPanel({
               .map((snapshot) => {
                 const favorite = favoriteSourceKeys.includes(snapshot.source.canonicalKey);
                 const active = snapshot.source.canonicalKey === selectedSourceKey;
+                const aggregateEligible = aggregateSourceKeys.has(snapshot.source.canonicalKey);
+                const includedInAggregate = aggregateEligible && !excludedAggregateSourceKeys.includes(snapshot.source.canonicalKey);
                 return (
                   <div className={`source-chip${active ? " is-active" : ""}`} key={snapshot.source.canonicalKey}>
                     <button type="button" aria-pressed={active} onClick={() => selectSource(snapshot)}>
                       {snapshot.source.name}
                       {isLatestRunDiscovery(snapshot) && <span className="ranking-new-source-badge">New source</span>}
+                      {!aggregateEligible && <span className="ranking-individual-only-badge">Individual only</span>}
                     </button>
+                    {aggregateEligible && (
+                      <button
+                        className={`source-chip__aggregate-toggle${includedInAggregate ? " is-included" : ""}`}
+                        type="button"
+                        aria-label={`${includedInAggregate ? "Remove" : "Include"} ${snapshot.source.name} ${includedInAggregate ? "from" : "in"} aggregate`}
+                        aria-pressed={includedInAggregate}
+                        title={includedInAggregate ? "Included in aggregate" : "Excluded from aggregate"}
+                        onClick={() => onToggleAggregateSource(snapshot.source.canonicalKey)}
+                      >
+                        {includedInAggregate ? <CircleMinus size={12} /> : <CirclePlus size={12} />}
+                      </button>
+                    )}
                     <button
                       className={favorite ? "is-favorite" : ""}
                       type="button"
@@ -582,7 +617,7 @@ function AgentSnapshotPanel({
           <div className="snapshot-meta">
             <div>
               <strong>{selected.title}</strong>
-              <span>{selectedSourceKey === "aggregate" ? `${aggregate?.sourceSnapshots.length ?? 0} latest compatible source${aggregate?.sourceSnapshots.length === 1 ? "" : "s"}` : `${selected.source.name} · ${(selected.source.kind ?? "agent").toUpperCase()} ${selected.source.provider ? `via ${selected.source.provider}` : ""}`}</span>
+              <span>{selectedSourceKey === "aggregate" ? `${includedSourceCount} of ${totalSourceCount} latest compatible source${totalSourceCount === 1 ? "" : "s"} included` : `${selected.source.name} · ${(selected.source.kind ?? "agent").toUpperCase()} ${selected.source.provider ? `via ${selected.source.provider}` : ""}`}</span>
               <code title="Stable source key">{selectedSourceKey === "aggregate" ? "Unweighted arithmetic mean" : `Source key · ${selected.source.canonicalKey}`}</code>
               {selectedSourceKey !== "aggregate" && (selected.sourceUrl || selected.source.attributionUrl) && <a className="snapshot-source-link" href={selected.sourceUrl ?? selected.source.attributionUrl ?? undefined} target="_blank" rel="noreferrer">View original source <ExternalLink size={10} /></a>}
             </div>
@@ -591,7 +626,22 @@ function AgentSnapshotPanel({
               <span>{selected.scoringFormat.toUpperCase()} · {selected.rankingType.replaceAll("_", " ")} · {selected.season}</span>
             </div>
           </div>
-          {selected.summary && <p className="snapshot-summary">{selected.summary}</p>}
+          {selected.summary && !aggregateHasNoIncludedSources && <p className="snapshot-summary">{selected.summary}</p>}
+          {aggregateHasNoIncludedSources ? (
+            <div className="aggregate-sources-empty" role="status">
+              <Sparkles size={20} />
+              <h3>No sources are included in this aggregate</h3>
+              <p>Individual source boards are still available. Include a source below or restore every compatible source.</p>
+              <div>
+                <button type="button" onClick={() => onRestoreAggregateSources([...aggregateSourceKeys])}>Restore all sources</button>
+                {fullAggregate?.sourceSnapshots.map((snapshot) => (
+                  <button key={snapshot.source.canonicalKey} type="button" onClick={() => onToggleAggregateSource(snapshot.source.canonicalKey)}>
+                    <CirclePlus size={11} /> Include {snapshot.source.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : <>
           <div className="agent-list-controls" aria-label="Agent ranking list controls">
             <label>
               <span>Position</span>
@@ -654,6 +704,7 @@ function AgentSnapshotPanel({
               <RefreshCw size={13} /> Research an update
             </NavLink>}
           </div>
+          </>}
           {sourceHistory.length > 1 && (
             <label className="snapshot-select">
               Source history
@@ -810,6 +861,21 @@ export default function RankingsPage() {
     }));
   }
 
+  function toggleSourceInAggregate(sourceKey: string) {
+    setPreferences((current) => ({
+      ...current,
+      excludedAggregateSourceKeys: toggleAggregateSource(current.excludedAggregateSourceKeys, sourceKey),
+    }));
+  }
+
+  function restoreAggregateSources(sourceKeys: string[]) {
+    const currentScopeKeys = new Set(sourceKeys);
+    setPreferences((current) => ({
+      ...current,
+      excludedAggregateSourceKeys: current.excludedAggregateSourceKeys.filter((key) => !currentScopeKeys.has(key)),
+    }));
+  }
+
   const personalWorkspace = (
     <section className="workspace-section workspace-section--personal" aria-labelledby="personal-workspace-title">
       <header className="workspace-section__banner">
@@ -877,11 +943,14 @@ export default function RankingsPage() {
         error={snapshotError}
         collapsed={preferences.agentCollapsed}
         favoriteSourceKeys={preferences.favoriteSourceKeys}
+        excludedAggregateSourceKeys={preferences.excludedAggregateSourceKeys}
         researchByPlayer={researchByPlayer}
         hasOwnerToken={Boolean(ownerToken)}
         onCollapsedChange={(agentCollapsed) => updatePreferences({ agentCollapsed })}
         onRefresh={() => { void loadAgentSnapshots(); }}
         onToggleFavorite={toggleSource}
+        onToggleAggregateSource={toggleSourceInAggregate}
+        onRestoreAggregateSources={restoreAggregateSources}
         onApply={requestAgentOrder}
       />
     </section>

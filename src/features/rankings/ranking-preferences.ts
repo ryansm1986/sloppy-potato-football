@@ -7,6 +7,7 @@ export type RankingsPreferences = {
   splitRatio: number;
   agentCollapsed: boolean;
   favoriteSourceKeys: string[];
+  excludedAggregateSourceKeys: string[];
 };
 
 export const RANKINGS_PREFERENCES_STORAGE_KEY = "spff:rankings:preferences:v1";
@@ -25,7 +26,14 @@ export const defaultRankingsPreferences: RankingsPreferences = {
   splitRatio: DEFAULT_RANKINGS_SPLIT_RATIO,
   agentCollapsed: false,
   favoriteSourceKeys: [],
+  excludedAggregateSourceKeys: [],
 };
+
+function uniqueSourceKeys(value: unknown): string[] {
+  return Array.isArray(value)
+    ? [...new Set(value.filter((key): key is string => typeof key === "string" && key.length > 0))]
+    : [];
+}
 
 export function loadRankingsPreferences(
   storage: Pick<Storage, "getItem">,
@@ -40,9 +48,8 @@ export function loadRankingsPreferences(
       sectionOrder: saved.sectionOrder === "agent-first" ? "agent-first" : "personal-first",
       splitRatio: clampRankingsSplitRatio(typeof saved.splitRatio === "number" ? saved.splitRatio : DEFAULT_RANKINGS_SPLIT_RATIO),
       agentCollapsed: saved.agentCollapsed === true,
-      favoriteSourceKeys: Array.isArray(favoriteSourceKeys)
-        ? [...new Set(favoriteSourceKeys.filter((key): key is string => typeof key === "string" && key.length > 0))]
-        : [],
+      favoriteSourceKeys: uniqueSourceKeys(favoriteSourceKeys),
+      excludedAggregateSourceKeys: uniqueSourceKeys(saved.excludedAggregateSourceKeys),
     };
   } catch {
     return defaultRankingsPreferences;
@@ -63,4 +70,13 @@ export function toggleFavoriteSource(
   return favorites.includes(sourceKey)
     ? favorites.filter((key) => key !== sourceKey)
     : [...favorites, sourceKey];
+}
+
+export function toggleAggregateSource(
+  excludedSourceKeys: string[],
+  sourceKey: string,
+): string[] {
+  return excludedSourceKeys.includes(sourceKey)
+    ? excludedSourceKeys.filter((key) => key !== sourceKey)
+    : [...excludedSourceKeys, sourceKey];
 }

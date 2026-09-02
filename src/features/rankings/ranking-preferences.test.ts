@@ -5,6 +5,7 @@ import {
   defaultRankingsPreferences,
   loadRankingsPreferences,
   saveRankingsPreferences,
+  toggleAggregateSource,
   toggleFavoriteSource,
 } from "./ranking-preferences";
 
@@ -25,6 +26,7 @@ describe("rankings view preferences", () => {
       splitRatio: 42,
       agentCollapsed: true,
       favoriteSourceKeys: ["agent:codex-rank-agent", "agent:codex-rank-agent"],
+      excludedAggregateSourceKeys: ["external:expert-b", "external:expert-b"],
     });
 
     expect(values.has(RANKINGS_PREFERENCES_STORAGE_KEY)).toBe(true);
@@ -34,6 +36,7 @@ describe("rankings view preferences", () => {
       splitRatio: 42,
       agentCollapsed: true,
       favoriteSourceKeys: ["agent:codex-rank-agent"],
+      excludedAggregateSourceKeys: ["external:expert-b"],
     });
   });
 
@@ -49,5 +52,10 @@ describe("rankings view preferences", () => {
   it("toggles favorite sources by stable slug", () => {
     expect(toggleFavoriteSource([], "fantasypros")).toEqual(["fantasypros"]);
     expect(toggleFavoriteSource(["fantasypros"], "fantasypros")).toEqual([]);
+  });
+
+  it("toggles aggregate membership as stable excluded source keys", () => {
+    expect(toggleAggregateSource([], "external:fantasypros")).toEqual(["external:fantasypros"]);
+    expect(toggleAggregateSource(["external:fantasypros"], "external:fantasypros")).toEqual([]);
   });
 });

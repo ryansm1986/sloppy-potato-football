@@ -155,12 +155,12 @@ describe("RankingsPage", () => {
 
     const agent = await screen.findByRole("region", { name: "Agent Rankings" });
     const sourceSelect = within(agent).getByLabelText("Ranking source");
-    expect(within(sourceSelect).getByRole("option", { name: "Aggregate · 2 sources" })).toBeInTheDocument();
+    expect(within(sourceSelect).getByRole("option", { name: "Aggregate · 2/2 sources" })).toBeInTheDocument();
     expect(within(sourceSelect).getByRole("option", { name: "Expert B" })).toBeInTheDocument();
     fireEvent.change(sourceSelect, { target: { value: "external:expert-b" } });
     expect(within(agent).getByText("Expert B PPR Rankings")).toBeInTheDocument();
     fireEvent.change(sourceSelect, { target: { value: "aggregate" } });
-    expect(within(agent).getByRole("button", { name: "Aggregate" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(agent).getByRole("button", { name: "Aggregate 2/2" })).toHaveAttribute("aria-pressed", "true");
     const aggregateChase = within(agent).getByRole("button", { name: /Ja'Marr Chase.*Average 1\.5/i });
     expect(within(aggregateChase).getByLabelText("Overall rank unavailable; WR rank 1")).toBeInTheDocument();
     fireEvent.click(aggregateChase);
@@ -180,6 +180,46 @@ describe("RankingsPage", () => {
     expect(within(details).getByText("Latest player research")).toBeInTheDocument();
     expect(within(details).getByText("Weekly & season stats")).toBeInTheDocument();
     expect(within(details).getByRole("link", { name: /Research latest news/i })).toHaveAttribute("href", "/research?subject=Ja'Marr%20Chase");
+  });
+
+  it("removes and restores sources in the aggregate while keeping individual boards selectable", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ snapshots: [agentSnapshot, secondExpertSnapshot] })));
+    const first = render(<MemoryRouter><RankingsPage /></MemoryRouter>);
+
+    const agent = await screen.findByRole("region", { name: "Agent Rankings" });
+    expect(within(agent).getByText("2 of 2 latest compatible sources included")).toBeInTheDocument();
+    expect(within(agent).getByRole("button", { name: /Ja'Marr Chase.*Average 1\.5/i })).toBeInTheDocument();
+
+    fireEvent.click(within(agent).getByRole("button", { name: "Remove Expert B from aggregate" }));
+    expect(within(agent).getByText("1 of 2 latest compatible sources included")).toBeInTheDocument();
+    expect(within(agent).getByRole("button", { name: /Ja'Marr Chase.*Average 2\.0/i })).toBeInTheDocument();
+    expect(within(agent).getByRole("button", { name: "Include Expert B in aggregate" })).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(within(agent).getByRole("button", { name: "Expert B" }));
+    expect(within(agent).getByText("Expert B PPR Rankings")).toBeInTheDocument();
+    fireEvent.click(within(agent).getByRole("button", { name: /Aggregate 1\/2/i }));
+    fireEvent.click(within(agent).getByRole("button", { name: "Remove Codex Rank Agent from aggregate" }));
+    expect(within(agent).getByText("No sources are included in this aggregate")).toBeInTheDocument();
+    expect(within(agent).getByRole("button", { name: "Include Expert B" })).toBeInTheDocument();
+    expect(within(agent).queryByRole("button", { name: "Copy into My Rankings" })).not.toBeInTheDocument();
+
+    expect(JSON.parse(window.localStorage.getItem(RANKINGS_PREFERENCES_STORAGE_KEY) ?? "{}")).toMatchObject({
+      excludedAggregateSourceKeys: ["external:expert-b", "agent:codex-rank-agent"],
+    });
+    first.unmount();
+
+    const savedPreferences = JSON.parse(window.localStorage.getItem(RANKINGS_PREFERENCES_STORAGE_KEY) ?? "{}");
+    savedPreferences.excludedAggregateSourceKeys.push("external:another-scope");
+    window.localStorage.setItem(RANKINGS_PREFERENCES_STORAGE_KEY, JSON.stringify(savedPreferences));
+
+    render(<MemoryRouter><RankingsPage /></MemoryRouter>);
+    const restoredAgent = await screen.findByRole("region", { name: "Agent Rankings" });
+    expect(within(restoredAgent).getByText("No sources are included in this aggregate")).toBeInTheDocument();
+    fireEvent.click(within(restoredAgent).getByRole("button", { name: "Restore all sources" }));
+    expect(within(restoredAgent).getByText("2 of 2 latest compatible sources included")).toBeInTheDocument();
+    expect(JSON.parse(window.localStorage.getItem(RANKINGS_PREFERENCES_STORAGE_KEY) ?? "{}")).toMatchObject({
+      excludedAggregateSourceKeys: ["external:another-scope"],
+    });
   });
 
   it("labels newly discovered ranking publishers and reports the scout result", async () => {

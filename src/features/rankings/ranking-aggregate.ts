@@ -104,7 +104,10 @@ type MutableAggregate = {
   sourceRanks: AggregateSourceRank[];
 };
 
-export function aggregateRankingSnapshots(snapshots: AgentRankingSnapshot[]): RankingAggregate | null {
+export function aggregateRankingSnapshots(
+  snapshots: AgentRankingSnapshot[],
+  excludedSourceKeys: readonly string[] = [],
+): RankingAggregate | null {
   const anchor = [...snapshots].sort(compareNewest)[0];
   if (!anchor) return null;
 
@@ -112,7 +115,10 @@ export function aggregateRankingSnapshots(snapshots: AgentRankingSnapshot[]): Ra
   const compatible = selectLatestSnapshotPerSource(snapshots.filter((snapshot) => isSnapshotInScope(snapshot, scope)));
   const external = compatible.filter((snapshot) => snapshot.source.kind === "external");
   const usesAllAvailableSources = external.length < 2;
-  const sourceSnapshots = (usesAllAvailableSources ? compatible : external).sort(compareNewest);
+  const excluded = new Set(excludedSourceKeys);
+  const sourceSnapshots = (usesAllAvailableSources ? compatible : external)
+    .filter((snapshot) => !excluded.has(snapshot.source.canonicalKey))
+    .sort(compareNewest);
   const mode = usesAllAvailableSources ? "all_available" : "expert";
   const label = usesAllAvailableSources ? "All Available Sources Aggregate" : "Expert Aggregate";
 

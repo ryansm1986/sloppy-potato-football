@@ -133,6 +133,48 @@ describe("ranking aggregation", () => {
     expect(result?.sourceSnapshots).toHaveLength(3);
   });
 
+  it("excludes selected expert sources without changing the baseline aggregation mode", () => {
+    const expertA = makeSnapshot("a", { source: { canonicalKey: "expert:a" }, entries: [{ playerName: "Alpha", rank: 1 }] });
+    const expertB = makeSnapshot("b", { source: { canonicalKey: "expert:b" }, entries: [{ playerName: "Alpha", rank: 3 }] });
+    const synthesis = makeSnapshot("agent", {
+      source: { canonicalKey: "agent:synthesis", kind: "agent" },
+      entries: [{ playerName: "Alpha", rank: 100 }],
+    });
+
+    const oneIncluded = aggregateRankingSnapshots([expertA, expertB, synthesis], ["expert:b"]);
+    expect(oneIncluded?.mode).toBe("expert");
+    expect(oneIncluded?.sourceSnapshots.map((snapshot) => snapshot.id)).toEqual(["a"]);
+    expect(oneIncluded?.entries[0].averageRank).toBe(1);
+
+    const noneIncluded = aggregateRankingSnapshots([expertA, expertB, synthesis], ["expert:a", "expert:b"]);
+    expect(noneIncluded?.mode).toBe("expert");
+    expect(noneIncluded?.sourceSnapshots).toEqual([]);
+    expect(noneIncluded?.entries).toEqual([]);
+  });
+
+  it("keeps the newest excluded snapshot as the scope anchor", () => {
+    const newestWeekly = makeSnapshot("weekly", {
+      source: { canonicalKey: "expert:a" },
+      rankingType: "weekly",
+      week: 2,
+      generatedAt: "2026-09-02T00:00:00Z",
+    });
+    const compatibleWeekly = makeSnapshot("weekly-b", {
+      source: { canonicalKey: "expert:b" },
+      rankingType: "weekly",
+      week: 2,
+      generatedAt: "2026-09-01T00:00:00Z",
+    });
+    const olderSeason = makeSnapshot("season", {
+      source: { canonicalKey: "expert:c" },
+      generatedAt: "2026-08-31T00:00:00Z",
+    });
+
+    const result = aggregateRankingSnapshots([olderSeason, compatibleWeekly, newestWeekly], ["expert:a"]);
+    expect(result?.scope).toMatchObject({ rankingType: "weekly", week: 2 });
+    expect(result?.sourceSnapshots.map((snapshot) => snapshot.id)).toEqual(["weekly-b"]);
+  });
+
   it("orders by mean rank, then greater coverage, then player name", () => {
     const a = makeSnapshot("a", { source: { canonicalKey: "expert:a" }, entries: [
       { playerName: "Zulu", rank: 2 },
