@@ -20,6 +20,7 @@ import {
 import { useEffect, type ComponentType } from "react";
 import { NavLink, Route, Routes, useNavigate } from "react-router";
 import { lineup, movers, news } from "./data";
+import DesktopUpdateControl from "./features/desktop/DesktopUpdateControl";
 import RankingsPage from "./features/rankings/RankingsPage";
 import ResearchDeskPage from "./features/research/ResearchDeskPage";
 import SleepersPage from "./features/sleepers/SleepersPage";
@@ -83,11 +84,14 @@ function Sidebar() {
       <nav aria-label="Primary navigation">
         <NavItems />
       </nav>
-      <div className="sidebar__footer">
-        <div className="avatar">RS</div>
-        <div>
-          <strong>Ryan S.</strong>
-          <span>Commissioner</span>
+      <div className="sidebar__bottom">
+        <DesktopUpdateControl />
+        <div className="sidebar__footer">
+          <div className="avatar">RS</div>
+          <div>
+            <strong>Ryan S.</strong>
+            <span>Commissioner</span>
+          </div>
         </div>
       </div>
     </aside>

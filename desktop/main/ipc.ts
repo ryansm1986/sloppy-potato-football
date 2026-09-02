@@ -2,6 +2,7 @@ import { app, ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from "elect
 import type {
   DesktopNavigationRequest,
   DesktopSettings,
+  DesktopUpdateStatus,
   RunnerLogEntry,
   RunnerStatus,
 } from "../shared/contracts.js";
@@ -9,11 +10,13 @@ import { IPC_CHANNELS } from "../shared/contracts.js";
 import { sanitizeSettingsPatch, type SecureConfigStore } from "./config-store.js";
 import { enrollRunnerDevice } from "./runner-enrollment.js";
 import type { RunnerController } from "./runner-controller.js";
+import type { DesktopUpdaterController } from "./desktop-updater.js";
 import { isTrustedRendererUrl } from "./security.js";
 
 export interface DesktopIpcOptions {
   window: BrowserWindow;
   runner: RunnerController;
+  updates: DesktopUpdaterController;
   config: SecureConfigStore;
   devServerUrl?: string;
   showWindow(): void;
@@ -171,6 +174,22 @@ export function registerDesktopIpc(options: DesktopIpcOptions): () => void {
     options.showWindow();
     sendDesktopNavigation(options.window, { path: "/research/schedules" });
   });
+  handle(IPC_CHANNELS.updatesStatus, (_event, ...args) => {
+    assertNoArguments(args);
+    return options.updates.getStatus();
+  });
+  handle(IPC_CHANNELS.updatesCheck, (_event, ...args) => {
+    assertNoArguments(args);
+    return options.updates.check();
+  });
+  handle(IPC_CHANNELS.updatesDownload, (_event, ...args) => {
+    assertNoArguments(args);
+    return options.updates.download();
+  });
+  handle(IPC_CHANNELS.updatesRestart, (_event, ...args) => {
+    assertNoArguments(args);
+    return options.updates.restart();
+  });
 
   const unsubscribeStatus = options.runner.onStatus((status: RunnerStatus) => {
     if (!options.window.isDestroyed()) {
@@ -182,10 +201,16 @@ export function registerDesktopIpc(options: DesktopIpcOptions): () => void {
       options.window.webContents.send(IPC_CHANNELS.eventRunnerLog, entry);
     }
   });
+  const unsubscribeUpdates = options.updates.onStatus((status: DesktopUpdateStatus) => {
+    if (!options.window.isDestroyed()) {
+      options.window.webContents.send(IPC_CHANNELS.eventUpdateStatus, status);
+    }
+  });
 
   return () => {
     unsubscribeStatus();
     unsubscribeLogs();
+    unsubscribeUpdates();
     for (const channel of channels) ipcMain.removeHandler(channel);
   };
 }

@@ -41,6 +41,23 @@ export interface DesktopAppInfo {
   packaged: boolean;
 }
 
+export type DesktopUpdatePhase =
+  | "idle"
+  | "checking"
+  | "available"
+  | "downloading"
+  | "ready"
+  | "error"
+  | "unsupported";
+
+export interface DesktopUpdateStatus {
+  phase: DesktopUpdatePhase;
+  currentVersion: string;
+  availableVersion?: string;
+  downloadPercent?: number;
+  message?: string;
+}
+
 export interface DesktopNavigationRequest {
   path: "/research" | "/research/schedules";
 }
@@ -77,9 +94,14 @@ export const IPC_CHANNELS = {
   credentialsClearRunnerToken: "desktop:credentials-clear-runner-token",
   credentialsEnrollRunner: "desktop:credentials-enroll-runner",
   schedulesOpen: "desktop:schedules-open",
+  updatesStatus: "desktop:updates-status",
+  updatesCheck: "desktop:updates-check",
+  updatesDownload: "desktop:updates-download",
+  updatesRestart: "desktop:updates-restart",
   eventRunnerStatus: "desktop:event-runner-status",
   eventRunnerLog: "desktop:event-runner-log",
   eventNavigate: "desktop:event-navigate",
+  eventUpdateStatus: "desktop:event-update-status",
 } as const;
 
 export interface SloppyPotatoDesktopApi {
@@ -111,6 +133,14 @@ export interface SloppyPotatoDesktopApi {
   };
   schedules: {
     open(): Promise<void>;
+  };
+  /** Present in desktop builds that support in-app updates. */
+  updates?: {
+    status(): Promise<DesktopUpdateStatus>;
+    check(): Promise<DesktopUpdateStatus>;
+    download(): Promise<DesktopUpdateStatus>;
+    restart(): Promise<DesktopUpdateStatus>;
+    onStatus(listener: (status: DesktopUpdateStatus) => void): () => void;
   };
   navigation: {
     onRequest(listener: (request: DesktopNavigationRequest) => void): () => void;

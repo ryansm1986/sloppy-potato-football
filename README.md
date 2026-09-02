@@ -72,6 +72,14 @@ Bad, expired, and revoked credentials stop retrying after the first rejection. U
 
 It is safe to run the companion on a laptop and desktop at the same time. Each installation has a persistent random identity, and Cloudflare atomically leases each job to only one runner. Personal-ranking saves use revisions, so a stale device is asked to reload instead of overwriting a newer board.
 
+### Publishing desktop updates
+
+Installed NSIS copies check the public GitHub Releases feed without putting a GitHub token in the app. When a newer version is available, the desktop UI offers an explicit download and then an explicit restart-to-install action. The portable build does not auto-update; download a new portable executable manually.
+
+To publish an update, raise the semver `version` in `package.json` (and the lockfile), merge the tested change to `main`, then have Luna create and push the matching tag, such as `v0.1.1`. The `Publish desktop release` workflow validates that the tag and package version match, runs `pnpm check`, and publishes the NSIS installer, blockmap, and `latest.yml` to a GitHub Release. Do not reuse a version or move an existing release tag.
+
+The current Windows packages are unsigned, so Windows SmartScreen may warn during install or update. Code signing is strongly recommended before wider sharing.
+
 ## Deployment
 
 `pnpm deploy` runs the complete validation gate, applies pending remote D1 migrations, and deploys. The GitHub workflow does the same on every push to `main`, then smoke-tests production. Setup details are in [docs/deployment.md](docs/deployment.md).

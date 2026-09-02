@@ -154,11 +154,63 @@ button:focus-visible, a:focus-visible {
 .sidebar__link:hover { color: var(--text); background: var(--surface); }
 .sidebar__link.is-active { color: var(--amber); background: var(--amber-soft); border-color: rgba(245, 158, 11, .18); }
 
+.sidebar__bottom {
+  display: grid;
+  gap: 9px;
+  margin-top: auto;
+}
+
+.desktop-update {
+  position: relative;
+  width: 100%;
+  min-height: 50px;
+  display: grid;
+  grid-template-columns: 31px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  overflow: hidden;
+  padding: 8px 9px;
+  color: var(--text);
+  border: 1px solid rgba(245, 158, 11, .3);
+  border-radius: 7px;
+  background: linear-gradient(135deg, rgba(245, 158, 11, .14), rgba(245, 158, 11, .045));
+  text-align: left;
+  cursor: pointer;
+  transition: 150ms ease;
+}
+.desktop-update:hover:not(:disabled) { border-color: rgba(245, 158, 11, .62); background: var(--amber-soft); transform: translateY(-1px); }
+.desktop-update:disabled { cursor: progress; }
+.desktop-update__icon {
+  position: relative;
+  z-index: 1;
+  width: 31px;
+  height: 31px;
+  display: grid;
+  place-items: center;
+  color: #17100a;
+  border-radius: 6px;
+  background: var(--amber);
+}
+.desktop-update__copy { position: relative; z-index: 1; min-width: 0; display: grid; gap: 2px; }
+.desktop-update__copy strong, .desktop-update__copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.desktop-update__copy strong { font-size: 10px; letter-spacing: .015em; }
+.desktop-update__copy small { color: #b2b5bb; font-size: 8px; }
+.desktop-update__progress {
+  position: absolute;
+  inset: auto 0 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--amber) var(--desktop-update-progress), rgba(245, 158, 11, .12) var(--desktop-update-progress));
+}
+.desktop-update--ready { border-color: rgba(72, 199, 142, .42); background: rgba(72, 199, 142, .08); }
+.desktop-update--ready:hover:not(:disabled) { border-color: rgba(72, 199, 142, .7); background: rgba(72, 199, 142, .13); }
+.desktop-update--ready .desktop-update__icon { color: #07150f; background: var(--green); }
+.desktop-update--error { border-color: rgba(239, 107, 115, .36); background: rgba(239, 107, 115, .075); }
+.desktop-update--error .desktop-update__icon { color: #210709; background: var(--red); }
+
 .sidebar__footer {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-top: auto;
   padding: 13px 9px 2px;
   border-top: 1px solid var(--border-soft);
 }

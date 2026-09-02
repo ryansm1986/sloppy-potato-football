@@ -1,0 +1,51 @@
+name: Publish desktop release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish-windows-installer:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify tag matches package version
+        shell: pwsh
+        run: |
+          $packageVersion = (Get-Content package.json | ConvertFrom-Json).version
+          $tagVersion = "${{ github.ref_name }}" -replace '^v', ''
+          if ($tagVersion -ne $packageVersion) {
+            throw "Tag ${{ github.ref_name }} does not match package.json version $packageVersion."
+          }
+
+      - name: Typecheck, test, and build
+        run: pnpm check
+
+      - name: Package and publish installed app
+        run: pnpm exec electron-builder --win nsis --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"

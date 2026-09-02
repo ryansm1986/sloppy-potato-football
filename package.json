@@ -25,7 +25,7 @@
     "runner:once": "tsx runner/cli.ts once",
     "runner": "tsx runner/cli.ts run",
     "bridge:setup": "tsx runner/setup.ts",
-    "desktop:build:shell": "tsup desktop/main/entry.ts --format esm --platform node --external electron --out-dir dist-desktop/main && tsup desktop/preload.ts --format cjs --platform node --external electron --out-dir dist-desktop && node desktop/scripts/copy-assets.mjs",
+    "desktop:build:shell": "tsup desktop/main/entry.ts --format esm --platform node --external electron --external electron-updater --out-dir dist-desktop/main && tsup desktop/preload.ts --format cjs --platform node --external electron --out-dir dist-desktop && node desktop/scripts/copy-assets.mjs",
     "desktop:build": "pnpm build && pnpm desktop:build:shell",
     "desktop:dev": "pnpm desktop:build:shell && concurrently -k \"vite\" \"wait-on http-get://127.0.0.1:5173 && cross-env SLOPPY_POTATO_DESKTOP_DEV_URL=http://127.0.0.1:5173 electron .\"",
     "desktop:test": "vitest run --config desktop/vitest.config.ts",
@@ -40,6 +40,7 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "drizzle-orm": "latest",
+    "electron-updater": "^6.8.9",
     "exceljs": "4.4.0",
     "hono": "latest",
     "lucide-react": "latest",
@@ -84,6 +85,14 @@
     "directories": {
       "output": "release-desktop"
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "ryansm1986",
+        "repo": "sloppy-potato-football",
+        "releaseType": "release"
+      }
+    ],
     "win": {
       "icon": "desktop/assets/sloppy-potato-icon.png",
       "target": [

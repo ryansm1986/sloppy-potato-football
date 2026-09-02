@@ -7,11 +7,13 @@ import {
   type Event,
   type WebContents,
 } from "electron";
+import { autoUpdater } from "electron-updater";
 import type { DesktopSettings } from "../shared/contracts.js";
 import { installDesktopProtocol, registerDesktopScheme } from "./app-protocol.js";
 import { SecureConfigStore } from "./config-store.js";
 import { electronCredentialCipher, JsonFileAdapter } from "./electron-config-store.js";
 import { ExistingRunnerAdapter } from "./existing-runner-adapter.js";
+import { DesktopUpdater } from "./desktop-updater.js";
 import { registerDesktopIpc, sendDesktopNavigation } from "./ipc.js";
 import { RunnerNotifier } from "./notifier.js";
 import type { RunnerController } from "./runner-controller.js";
@@ -70,6 +72,15 @@ export async function launchDesktopApp(options: DesktopBootstrapOptions = {}): P
     ? await options.createRunnerController(config)
     : new ExistingRunnerAdapter(config, app.getPath("userData"));
   const developmentUrl = developmentUrlFromEnvironment();
+  const updates = new DesktopUpdater({
+    updater: autoUpdater,
+    runner,
+    runtime: {
+      currentVersion: app.getVersion(),
+      packaged: app.isPackaged,
+      installed: process.platform === "win32" && !process.env.PORTABLE_EXECUTABLE_FILE,
+    },
+  });
   const rendererRoot = path.join(app.getAppPath(), "dist", "client");
   installDesktopProtocol({ rendererRoot, getApiBaseUrl: () => config.getSettings().apiBaseUrl });
 
@@ -146,6 +157,7 @@ export async function launchDesktopApp(options: DesktopBootstrapOptions = {}): P
   const unregisterIpc = registerDesktopIpc({
     window,
     runner,
+    updates,
     config,
     devServerUrl: developmentUrl,
     showWindow,
@@ -159,6 +171,7 @@ export async function launchDesktopApp(options: DesktopBootstrapOptions = {}): P
   });
   tray.updateStatus(await runner.getStatus());
   if (config.hasRunnerToken()) void safely(() => runner.start())();
+  updates.start();
 
   window.on("close", (event: Event) => {
     if (!isQuitting && config.getSettings().closeToTray) {
@@ -177,6 +190,7 @@ export async function launchDesktopApp(options: DesktopBootstrapOptions = {}): P
     unregisterIpc();
     unsubscribeTrayStatus();
     tray.destroy();
+    updates.dispose();
     void runner.dispose();
   });
 

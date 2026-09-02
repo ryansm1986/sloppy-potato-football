@@ -88,6 +88,22 @@ Build a desktop settings panel around:
 - `credentials.enrollRunner()`, `hasRunnerToken()`, `setRunnerToken()`, and `clearRunnerToken()`. Enrollment exchanges the memory-only owner token for a one-time device credential in the main process; there is deliberately no credential-read method. Manual token entry remains a recovery path.
 - `runner.start()`, `pauseAfterCurrent()`, `resume()`, `stop()`, `runNext()`, `status()`, and `logs()`.
 
+## Desktop release and update feed
+
+The installed NSIS app reads update metadata from this repository's public GitHub Releases feed. It does not ship a GitHub access token. Development and portable builds do not use the updater; portable users replace their executable manually.
+
+Publishing is tag-driven:
+
+1. Change the semver `version` in `package.json` and refresh `pnpm-lock.yaml`.
+2. Run `pnpm check` and merge the release commit to `main`.
+3. Have Luna create and push a matching immutable tag, for example `v0.1.1` for package version `0.1.1`.
+4. Confirm the `Publish desktop release` GitHub Actions run succeeds.
+5. Confirm the resulting GitHub Release contains the NSIS installer plus `latest.yml` and its blockmap before testing the update from the previous installed version.
+
+The workflow has repository `contents: write` permission only for publishing the release. `electron-builder` receives the ephemeral Actions `GITHUB_TOKEN` as `GH_TOKEN`; that credential is never packaged. The workflow rejects tags that do not exactly match `package.json` after removing the leading `v`, then runs the full `pnpm check` gate before packaging with `electron-builder --win nsis --publish always`.
+
+Never reuse a package version, overwrite update metadata by hand, or move a published release tag. If a release fails, fix the cause and publish the next patch version. Keep the prior installed version available for an end-to-end update test.
+
 ## Security and release checklist
 
 - The renderer uses `contextIsolation`, Chromium sandboxing, `webSecurity`, and no Node integration.
@@ -96,4 +112,5 @@ Build a desktop settings panel around:
 - Test an installed NSIS build as a standard Windows user, including launch-at-login, suspend/resume, close-to-tray, explicit quit, offline queue recovery, and upgrade/uninstall behavior.
 - The startup registration supplies `--hidden`, so launch-at-login starts in the tray; verify this from an installed build because unpackaged Electron uses a different executable path.
 - Code signing is strongly recommended before sharing installers. Configure `CSC_LINK` and `CSC_KEY_PASSWORD` only in the release environment; never commit either value.
-- Auto-update is intentionally excluded from the MVP. Add it only after signed releases and a trusted update feed are available.
+- GitHub Releases is the trusted update feed, but the current artifacts remain unsigned. Expect Windows SmartScreen warnings until a signing certificate is configured in repository secrets.
+- Test both update actions from an installed NSIS build: download first, then restart-to-install. Also confirm an active research job is allowed to finish before the app exits.

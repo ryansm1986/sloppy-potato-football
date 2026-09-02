@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import type {
   DesktopNavigationRequest,
   DesktopSettings,
+  DesktopUpdateStatus,
   RunnerLogEntry,
   RunnerStatus,
   SloppyPotatoDesktopApi,
@@ -53,6 +54,14 @@ const desktopApi: SloppyPotatoDesktopApi = Object.freeze({
   }),
   schedules: Object.freeze({
     open: noArgs<void>(IPC_CHANNELS.schedulesOpen),
+  }),
+  updates: Object.freeze({
+    status: noArgs<DesktopUpdateStatus>(IPC_CHANNELS.updatesStatus),
+    check: noArgs<DesktopUpdateStatus>(IPC_CHANNELS.updatesCheck),
+    download: noArgs<DesktopUpdateStatus>(IPC_CHANNELS.updatesDownload),
+    restart: noArgs<DesktopUpdateStatus>(IPC_CHANNELS.updatesRestart),
+    onStatus: (listener: (status: DesktopUpdateStatus) => void) =>
+      subscribe(IPC_CHANNELS.eventUpdateStatus, listener),
   }),
   navigation: Object.freeze({
     onRequest: (listener: (request: DesktopNavigationRequest) => void) =>
