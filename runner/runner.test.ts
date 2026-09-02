@@ -43,10 +43,13 @@ const validResult = {
   rankingSnapshot: null,
 };
 
-function fakeSpawn(output: unknown): { implementation: SpawnImplementation; calls: Array<{ args: readonly string[]; env: NodeJS.ProcessEnv }> } {
-  const calls: Array<{ args: readonly string[]; env: NodeJS.ProcessEnv }> = [];
-  const implementation: SpawnImplementation = (_command, args, options) => {
-    calls.push({ args, env: options.env ?? {} });
+function fakeSpawn(output: unknown): {
+  implementation: SpawnImplementation;
+  calls: Array<{ command: string; args: readonly string[]; env: NodeJS.ProcessEnv; shell: boolean | string | undefined; windowsHide: boolean | undefined }>;
+} {
+  const calls: Array<{ command: string; args: readonly string[]; env: NodeJS.ProcessEnv; shell: boolean | string | undefined; windowsHide: boolean | undefined }> = [];
+  const implementation: SpawnImplementation = (command, args, options) => {
+    calls.push({ command, args, env: options.env ?? {}, shell: options.shell, windowsHide: options.windowsHide });
     const child = new EventEmitter() as EventEmitter & Partial<ChildProcessWithoutNullStreams>;
     child.stdin = new PassThrough();
     child.stdout = new PassThrough();
@@ -115,11 +118,18 @@ describe("local runner", () => {
       spawn: spawned.implementation,
       log: vi.fn(),
     })).resolves.toBe(true);
-    expect(spawned.calls[0]?.args).toEqual(expect.arrayContaining([
-      "--search", "--ignore-user-config", "--ignore-rules", "exec", "--sandbox", "read-only",
-      "--ephemeral", "--skip-git-repo-check", "--output-schema",
-    ]));
-    expect(spawned.calls[0]?.env.AGENT_RUNNER_TOKEN).toBeUndefined();
+    const invocation = spawned.calls[0]!;
+    const execIndex = invocation.args.indexOf("exec");
+    expect(invocation.args.slice(execIndex, execIndex + 9)).toEqual([
+      "exec", "--ignore-user-config", "--ignore-rules", "--model", "gpt-5.6-luna",
+      "--sandbox", "read-only", "--ephemeral", "--skip-git-repo-check",
+    ]);
+    expect(invocation.args.filter((argument) => argument === "--model")).toHaveLength(1);
+    expect(invocation.args).not.toContain("gpt-5.6-sol");
+    if (process.platform === "win32") expect(invocation.command.toLowerCase()).toMatch(/codex\.exe$/u);
+    expect(invocation.shell).toBe(false);
+    expect(invocation.windowsHide).toBe(true);
+    expect(invocation.env.AGENT_RUNNER_TOKEN).toBeUndefined();
     expect(api.complete).toHaveBeenCalledWith(job.id, job.leaseToken, expect.objectContaining({ summary: validResult.summary }));
     expect(api.fail).not.toHaveBeenCalled();
   });

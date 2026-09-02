@@ -16,6 +16,7 @@ export type SpawnImplementation = (
 
 const OUTPUT_LIMIT_BYTES = 1_000_000;
 const RESEARCH_RESULT_SCHEMA_FILE = "research-result.schema.json";
+export const RESEARCH_CODEX_MODEL = "gpt-5.6-luna";
 
 export function resolveResearchResultSchemaPath(
   moduleUrl = import.meta.url,
@@ -57,6 +58,14 @@ function collectBounded(current: string, chunk: Buffer | string, maximum = 65_53
   return (current + chunk.toString()).slice(0, maximum);
 }
 
+export function summarizeCodexFailure(stderr: string, stdout: string, exitCode: number): string {
+  const output = redact(stderr || stdout).trim();
+  const lines = output.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
+  const diagnostic = [...lines].reverse().find((line) => /^(?:error|fatal|failed)\b/iu.test(line));
+  if (diagnostic) return diagnostic.slice(0, 500);
+  return `process exited with code ${exitCode}`;
+}
+
 export class CodexExecutionError extends Error {
   constructor(
     message: string,
@@ -82,6 +91,7 @@ export async function executeCodexJob(
   const args = [
     ...invocation.prefixArgs,
     "--search", "exec", "--ignore-user-config", "--ignore-rules",
+    "--model", RESEARCH_CODEX_MODEL,
     "--sandbox", "read-only", "--ephemeral", "--skip-git-repo-check",
     "--output-schema", schemaPath, "-o", outputPath, "-",
   ] as const;
@@ -135,7 +145,7 @@ export async function executeCodexJob(
   }
 
   if (exitCode !== 0) {
-    const detail = redact(stderr || stdout || `exit code ${exitCode}`).slice(0, 1_000);
+    const detail = summarizeCodexFailure(stderr, stdout, exitCode);
     await rm(outputPath, { force: true });
     throw new CodexExecutionError(`Codex failed: ${detail}`, "CODEX_FAILED", true);
   }
