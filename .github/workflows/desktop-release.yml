@@ -45,7 +45,19 @@ jobs:
         run: pnpm check
 
       - name: Package and publish installed app
-        run: pnpm exec electron-builder --win nsis --publish always
+        shell: pwsh
+        run: |
+          pnpm exec electron-builder --win nsis --publish never
+          if ($LASTEXITCODE -ne 0) { throw "Desktop packaging failed." }
+
+          $packageVersion = (Get-Content package.json | ConvertFrom-Json).version
+          $installers = @(Get-ChildItem -LiteralPath release-desktop -Filter '*Setup*.exe')
+          if ($installers.Count -ne 1) { throw "Expected exactly one installer, found $($installers.Count)." }
+
+          $installer = $installers[0]
+          $blockMap = Get-Item -LiteralPath ($installer.FullName + '.blockmap')
+          $metadata = Get-Item -LiteralPath 'release-desktop\latest.yml'
+          gh release create "${{ github.ref_name }}" $installer.FullName $blockMap.FullName $metadata.FullName --title "Sloppy Potato Fantasy Football $packageVersion" --generate-notes --verify-tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: "false"

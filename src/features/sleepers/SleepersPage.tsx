@@ -258,7 +258,7 @@ export default function SleepersPage({ localDevelopmentOverride }: { localDevelo
       </section>
 
       <div className="sleepers-layout">
-        <main className="panel sleeper-board">
+        <section className="panel sleeper-board">
           <div className="sleeper-tabs" role="tablist" aria-label="Sleeper positions">
             {SLEEPER_POSITIONS.map((position) => (
               <button
@@ -300,7 +300,7 @@ export default function SleepersPage({ localDevelopmentOverride }: { localDevelo
               </div>
             )}
           </section>
-        </main>
+        </section>
 
         <aside className="sleepers-side">
           <section className="panel sleeper-refresh-card">

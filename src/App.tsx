@@ -151,7 +151,7 @@ function DesktopNavigationBridge() {
 
 function Huddle() {
   return (
-    <div className="page">
+    <div className="page huddle-page">
       <header className="page-header">
         <div>
           <p className="eyebrow">Tuesday, September 1 · Week 1</p>
