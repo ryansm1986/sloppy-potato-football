@@ -64,6 +64,30 @@ export type CreateResearchJob = {
   discoverNewSources?: boolean;
 };
 
+export type ResearchSchedule = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  timeZone: string;
+  localTime: string;
+  daysOfWeek: number[];
+  job: CreateResearchJob;
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  lastJobId: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CreateResearchSchedule = {
+  name: string;
+  enabled?: boolean;
+  timeZone: string;
+  localTime: string;
+  daysOfWeek: number[];
+  job: CreateResearchJob;
+};
+
 export class ResearchApiError extends Error {
   constructor(message: string, readonly status: number) {
     super(message);
@@ -125,6 +149,57 @@ export async function createResearchJob(token: string, input: CreateResearchJob)
 
 export async function retryResearchJob(token: string, jobId: string): Promise<ResearchJob> {
   const response = await fetch(`/api/research/jobs/${encodeURIComponent(jobId)}/retry`, {
+    method: "POST",
+    headers: authHeaders(token, true),
+  });
+  if (!response.ok) throw await parseError(response);
+  const payload = await response.json() as { job?: ResearchJob } | ResearchJob;
+  return "job" in payload && payload.job ? payload.job : payload as ResearchJob;
+}
+
+export async function fetchResearchSchedules(token: string, signal?: AbortSignal): Promise<ResearchSchedule[]> {
+  const response = await fetch("/api/research/schedules", { headers: authHeaders(token), signal });
+  if (!response.ok) throw await parseError(response);
+  const payload = await response.json() as { schedules?: ResearchSchedule[] } | ResearchSchedule[];
+  return Array.isArray(payload) ? payload : payload.schedules ?? [];
+}
+
+export async function createResearchSchedule(token: string, input: CreateResearchSchedule): Promise<ResearchSchedule> {
+  const response = await fetch("/api/research/schedules", {
+    method: "POST",
+    headers: authHeaders(token, true),
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throw await parseError(response);
+  const payload = await response.json() as { schedule?: ResearchSchedule } | ResearchSchedule;
+  return "schedule" in payload && payload.schedule ? payload.schedule : payload as ResearchSchedule;
+}
+
+export async function updateResearchSchedule(
+  token: string,
+  scheduleId: string,
+  changes: Partial<CreateResearchSchedule>,
+): Promise<ResearchSchedule> {
+  const response = await fetch(`/api/research/schedules/${encodeURIComponent(scheduleId)}`, {
+    method: "PATCH",
+    headers: authHeaders(token, true),
+    body: JSON.stringify(changes),
+  });
+  if (!response.ok) throw await parseError(response);
+  const payload = await response.json() as { schedule?: ResearchSchedule } | ResearchSchedule;
+  return "schedule" in payload && payload.schedule ? payload.schedule : payload as ResearchSchedule;
+}
+
+export async function deleteResearchSchedule(token: string, scheduleId: string): Promise<void> {
+  const response = await fetch(`/api/research/schedules/${encodeURIComponent(scheduleId)}`, {
+    method: "DELETE",
+    headers: authHeaders(token),
+  });
+  if (!response.ok) throw await parseError(response);
+}
+
+export async function runResearchScheduleNow(token: string, scheduleId: string): Promise<ResearchJob> {
+  const response = await fetch(`/api/research/schedules/${encodeURIComponent(scheduleId)}/run`, {
     method: "POST",
     headers: authHeaders(token, true),
   });

@@ -7,7 +7,7 @@ import { assertIsolatedWorkspace } from "./codex.js";
 import { loadRunnerEnv, readConfig } from "./config.js";
 import { runWithRunnerInstanceLock } from "./instance-lock.js";
 import { redact } from "./redact.js";
-import { runForever, runOneJob } from "./runner.js";
+import { RunnerController, runOneJob } from "./runner.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -37,7 +37,27 @@ async function main(): Promise<void> {
       if (!processed) console.log("No approved research jobs are queued.");
     });
   }
-  if (command === "run") return runWithRunnerInstanceLock(config, () => runForever(config));
+  if (command === "run") {
+    const controller = new RunnerController(config, { log: console.log });
+    const onSigint = () => {
+      process.exitCode = 130;
+      void controller.stop();
+    };
+    const onSigterm = () => {
+      process.exitCode = 143;
+      void controller.stop();
+    };
+    process.once("SIGINT", onSigint);
+    process.once("SIGTERM", onSigterm);
+    try {
+      await controller.start();
+      await controller.waitUntilStopped();
+    } finally {
+      process.removeListener("SIGINT", onSigint);
+      process.removeListener("SIGTERM", onSigterm);
+    }
+    return;
+  }
   throw new Error("Usage: pnpm runner:doctor | pnpm runner:once | pnpm runner");
 }
 

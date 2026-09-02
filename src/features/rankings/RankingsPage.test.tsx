@@ -79,6 +79,57 @@ describe("RankingsPage", () => {
     expect(screen.getByText(/Saved your personal rankings on this device/)).toBeInTheDocument();
   });
 
+  it("loads and saves the owner cloud board across devices", async () => {
+    window.localStorage.setItem(RESEARCH_OWNER_TOKEN_KEY, "owner-secret");
+    const catalogPlayers = [
+      canonicalPlayer("canonical-chase", "Ja'Marr Chase", "WR", "CIN"),
+      canonicalPlayer("canonical-bijan", "Bijan Robinson", "RB", "ATL"),
+    ];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/players?")) return Response.json({ players: catalogPlayers, nextCursor: null });
+      if (url.startsWith("/api/rankings/snapshots")) return Response.json({ snapshots: [] });
+      if (url.startsWith("/api/research/jobs?")) return Response.json({ jobs: [] });
+      if (url === "/api/research/personal-rankings" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { playerIds: string[] };
+        return Response.json({
+          board: { id: "board-1", revision: 3, name: "My Rankings", season: "2026", updatedAt: new Date().toISOString(), entries: [] },
+          savedCount: body.playerIds.length,
+          ignoredPlayerIds: [],
+        });
+      }
+      if (url.startsWith("/api/research/personal-rankings?")) return Response.json({
+        board: {
+          id: "board-1",
+          revision: 2,
+          name: "My Rankings",
+          season: "2026",
+          updatedAt: new Date().toISOString(),
+          entries: [
+            { id: "canonical-chase", name: "Ja'Marr Chase", position: "WR", team: "CIN", consensusRank: null, trend: null },
+            { id: "canonical-bijan", name: "Bijan Robinson", position: "RB", team: "ATL", consensusRank: null, trend: null },
+          ],
+        },
+      });
+      if (url === "/api/research/runner/status") return Response.json({ runner: null });
+      return Response.json({ error: "Unexpected request" }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<MemoryRouter><RankingsPage /></MemoryRouter>);
+
+    const personal = screen.getByRole("region", { name: "My Rankings" });
+    expect(await within(personal).findByLabelText("Overall rank 1; WR rank 1")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /save my rankings/i }));
+
+    expect(await screen.findByText(/Saved 2 players to your private cloud board/)).toBeInTheDocument();
+    const saveCall = fetchMock.mock.calls.find(([url, init]) => url === "/api/research/personal-rankings" && init?.method === "PUT");
+    expect(JSON.parse(String(saveCall?.[1]?.body))).toMatchObject({
+      playerIds: ["canonical-chase", "canonical-bijan"],
+      expectedRevision: 2,
+      leagueSize: 12,
+    });
+  });
+
   it("hydrates a comprehensive canonical board and quick-moves a filtered player to an exact overall rank", async () => {
     const catalogPlayers = [
       canonicalPlayer("canonical-chase", "Ja'Marr Chase", "WR", "CIN"),

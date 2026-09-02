@@ -298,17 +298,27 @@ export async function createResearchJob(
         ? { ...input, knownSourceDomains: await snapshotKnownRankingSourceDomains(db) }
         : input
     : input;
-  await db.$client.batch([
-    db.$client.prepare(
-      `INSERT INTO research_jobs
-       (id, owner_identity, job_type, status, priority, task_input_json, idempotency_key,
-        attempt_count, max_attempts, created_at, updated_at)
-       VALUES (?, ?, ?, 'queued', 0, ?, ?, 0, 3, ?, ?)`,
-    ).bind(id, ownerIdentity, input.type, JSON.stringify(taskInput), idempotencyKey, now, now),
-    db.$client.prepare(
-      "INSERT INTO research_job_events (id, job_id, event_type, actor_type, actor_id, details_json, created_at) VALUES (?, ?, 'queued', 'owner', ?, '{}', ?)",
-    ).bind(crypto.randomUUID(), id, ownerIdentity, now),
-  ]);
+  try {
+    await db.$client.batch([
+      db.$client.prepare(
+        `INSERT INTO research_jobs
+         (id, owner_identity, job_type, status, priority, task_input_json, idempotency_key,
+          attempt_count, max_attempts, created_at, updated_at)
+         VALUES (?, ?, ?, 'queued', 0, ?, ?, 0, 3, ?, ?)`,
+      ).bind(id, ownerIdentity, input.type, JSON.stringify(taskInput), idempotencyKey, now, now),
+      db.$client.prepare(
+        "INSERT INTO research_job_events (id, job_id, event_type, actor_type, actor_id, details_json, created_at) VALUES (?, ?, 'queued', 'owner', ?, '{}', ?)",
+      ).bind(crypto.randomUUID(), id, ownerIdentity, now),
+    ]);
+  } catch (error) {
+    // Concurrent cron deliveries may race between the lookup and insert. The
+    // database uniqueness constraint is the authority for idempotency.
+    const raced = await db.$client.prepare(
+      "SELECT * FROM research_jobs WHERE owner_identity = ? AND idempotency_key = ?",
+    ).bind(ownerIdentity, idempotencyKey).first<ResearchJobRow>();
+    if (raced) return { job: toPublicJob(raced), created: false };
+    throw error;
+  }
   const row = await findJob(db, id);
   return { job: toPublicJob(row!), created: true };
 }

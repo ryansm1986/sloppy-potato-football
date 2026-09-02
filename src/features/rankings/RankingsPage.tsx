@@ -63,6 +63,11 @@ import {
 import { fetchAgentRankings, type AgentRankingSnapshot } from "./agent-api";
 import { fetchFantasyPlayerCatalog, type CanonicalFantasyPlayer } from "./player-api";
 import {
+  fetchCloudPersonalRankings,
+  saveCloudPersonalRankings,
+  type CloudPersonalRankingBoard,
+} from "./personal-rankings-api";
+import {
   aggregateRankingSnapshots,
   isSnapshotInScope,
   normalizePlayerName,
@@ -769,6 +774,10 @@ export default function RankingsPage() {
   const ownerToken = typeof window === "undefined" ? "" : window.localStorage.getItem(RESEARCH_OWNER_TOKEN_KEY)?.trim() ?? "";
   const [pendingCopy, setPendingCopy] = useState<{ snapshot: AgentRankingSnapshot; position: string } | null>(null);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
+  const [cloudBoard, setCloudBoard] = useState<CloudPersonalRankingBoard | null>(null);
+  const [cloudBoardLoaded, setCloudBoardLoaded] = useState(!ownerToken);
+  const [cloudBoardError, setCloudBoardError] = useState<string | null>(null);
+  const [cloudSaving, setCloudSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportStatus, setExportStatus] = useState<{ message: string; error: boolean } | null>(null);
   const [pendingRankMove, setPendingRankMove] = useState<{ playerId: string; rank: string } | null>(null);
@@ -835,6 +844,26 @@ export default function RankingsPage() {
     return () => controller.abort();
   }, [ownerToken]);
 
+  useEffect(() => {
+    if (!ownerToken) {
+      setCloudBoard(null);
+      setCloudBoardLoaded(true);
+      setCloudBoardError(null);
+      return;
+    }
+    const controller = new AbortController();
+    setCloudBoardLoaded(false);
+    setCloudBoardError(null);
+    void fetchCloudPersonalRankings(ownerToken, String(new Date().getUTCFullYear()), controller.signal)
+      .then(setCloudBoard)
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setCloudBoardError(error instanceof Error ? error.message : "Could not load your cloud rankings.");
+      })
+      .finally(() => { if (!controller.signal.aborted) setCloudBoardLoaded(true); });
+    return () => controller.abort();
+  }, [ownerToken]);
+
   const researchByPlayer = useMemo(() => {
     const byPlayer = new Map<string, ResearchJob>();
     for (const job of researchJobs) {
@@ -851,14 +880,14 @@ export default function RankingsPage() {
   );
 
   useEffect(() => {
-    if (catalogLoading || snapshotsLoading || catalogError || playerCatalog.length === 0) return;
+    if (catalogLoading || snapshotsLoading || !cloudBoardLoaded || catalogError || playerCatalog.length === 0) return;
     setRankings((current) => hydratePersonalRankings(
-      catalogHydrated ? current : initialSavedRankings.current,
+      catalogHydrated ? current : cloudBoard?.entries ?? initialSavedRankings.current,
       playerCatalog,
       currentAggregateEntries,
     ));
     setCatalogHydrated(true);
-  }, [catalogError, catalogHydrated, catalogLoading, currentAggregateEntries, playerCatalog, snapshotsLoading]);
+  }, [catalogError, catalogHydrated, catalogLoading, cloudBoard, cloudBoardLoaded, currentAggregateEntries, playerCatalog, snapshotsLoading]);
 
   async function loadAgentSnapshots(signal?: AbortSignal) {
     setSnapshotsLoading(true);
@@ -955,10 +984,33 @@ export default function RankingsPage() {
     setPendingCopy({ snapshot, position: copyPosition });
   }
 
-  function saveBoard() {
+  async function saveBoard() {
     savePersonalRankings(window.localStorage, rankings);
     setSavedAt(new Date());
-    setAnnouncement("Saved your personal rankings on this device");
+    if (!ownerToken) {
+      setAnnouncement("Saved your personal rankings on this device. Add owner access in Research Desk to sync them across devices.");
+      return;
+    }
+    setCloudSaving(true);
+    setCloudBoardError(null);
+    try {
+      const result = await saveCloudPersonalRankings(ownerToken, rankings.map((player) => player.id), {
+        revision: cloudBoard?.revision,
+        season: String(new Date().getUTCFullYear()),
+        leagueSize,
+      });
+      setCloudBoard(result.board);
+      setSavedAt(new Date());
+      setAnnouncement(result.ignoredPlayerIds.length > 0
+        ? `Saved ${result.savedCount} canonical players to your private cloud board; ${result.ignoredPlayerIds.length} custom entries remain saved only on this device.`
+        : `Saved ${result.savedCount} players to your private cloud board and this device.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not save your cloud rankings.";
+      setCloudBoardError(message);
+      setAnnouncement(`Saved on this device, but cloud sync failed: ${message}`);
+    } finally {
+      setCloudSaving(false);
+    }
   }
 
   async function exportWorkbook() {
@@ -1138,8 +1190,9 @@ export default function RankingsPage() {
           <button className="button button--secondary export-rankings" disabled={exporting} type="button" onClick={() => { void exportWorkbook(); }}>
             <FileSpreadsheet size={14} /> {exporting ? "Exporting…" : "Export Excel"}
           </button>
-          <button className="button button--secondary save-board" type="button" onClick={saveBoard}><Check size={14} /> Save my rankings</button>
+          <button className="button button--secondary save-board" disabled={cloudSaving} type="button" onClick={() => { void saveBoard(); }}><Check size={14} /> {cloudSaving ? "Saving…" : "Save my rankings"}</button>
           <span className="autosave-state">{savedAt ? `Saved ${savedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "Not saved"}</span>
+          {cloudBoardError && <span className="rankings-export-status is-error" role="alert">Cloud sync: {cloudBoardError}</span>}
           {exportStatus && <span className={`rankings-export-status${exportStatus.error ? " is-error" : ""}`} role="status">{exportStatus.message}</span>}
         </div>
       </header>

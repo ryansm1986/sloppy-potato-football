@@ -16,6 +16,21 @@ export type SpawnImplementation = (
 
 const OUTPUT_LIMIT_BYTES = 1_000_000;
 
+export function codexChildEnvironment(
+  invocation: ReturnType<typeof resolveCodexInvocation>,
+  environment: NodeJS.ProcessEnv = process.env,
+  electronRuntime = Boolean(process.versions.electron),
+  runtimeExecutable = process.execPath,
+): NodeJS.ProcessEnv {
+  const childEnvironment = safeChildEnvironment(environment);
+  const launchesJavaScriptEntrypoint = invocation.command === runtimeExecutable
+    && invocation.prefixArgs[0]?.toLowerCase().endsWith(".js");
+  if (electronRuntime && launchesJavaScriptEntrypoint) {
+    childEnvironment.ELECTRON_RUN_AS_NODE = "1";
+  }
+  return childEnvironment;
+}
+
 function assertIsolatedWorkspace(workspace: string, appDirectory = process.cwd()): void {
   const app = resolve(appDirectory).toLowerCase();
   const target = resolve(workspace).toLowerCase();
@@ -62,7 +77,7 @@ export async function executeCodexJob(
   try {
     child = spawnImplementation(invocation.command, args, {
       cwd: config.workspace,
-      env: safeChildEnvironment(process.env),
+      env: codexChildEnvironment(invocation),
       shell: false,
       windowsHide: true,
     });

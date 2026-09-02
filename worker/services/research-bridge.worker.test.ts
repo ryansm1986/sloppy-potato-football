@@ -54,6 +54,57 @@ describe("research runner bridge", () => {
     expect(wrongRunner.status).toBe(401);
   });
 
+  it("atomically leases one queued job to only one of two desktop runners", async () => {
+    const suffix = crypto.randomUUID();
+    const laptopRunner = `laptop-${suffix}`;
+    const desktopRunner = `desktop-${suffix}`;
+    await Promise.all([heartbeat(laptopRunner), heartbeat(desktopRunner)]);
+
+    const createdResponse = await app.request(
+      "https://potato.example/api/research/jobs",
+      jsonRequest("POST", {
+        type: "player_research",
+        subject: "Bijan Robinson",
+        season: "2026",
+      }, "owner-secret", { "Idempotency-Key": `multi-device-${suffix}` }),
+      sharedBindings,
+    );
+    expect(createdResponse.status).toBe(201);
+    const created = await createdResponse.json<{ job: { id: string } }>();
+
+    const claimFor = async (runnerId: string) => {
+      const response = await app.request(
+        "https://potato.example/api/runners/jobs/claim",
+        jsonRequest("POST", { runnerId }, "runner-secret"),
+        sharedBindings,
+      );
+      return response.json<{ job: { id: string; leaseToken: string } | null }>();
+    };
+    const [laptopClaim, desktopClaim] = await Promise.all([
+      claimFor(laptopRunner),
+      claimFor(desktopRunner),
+    ]);
+
+    const winners = [
+      { runnerId: laptopRunner, job: laptopClaim.job },
+      { runnerId: desktopRunner, job: desktopClaim.job },
+    ].filter((claim): claim is { runnerId: string; job: { id: string; leaseToken: string } } => claim.job !== null);
+    expect(winners).toHaveLength(1);
+    expect(winners[0]?.job.id).toBe(created.job.id);
+
+    const persisted = await env.DB.prepare(
+      "SELECT status, leased_by_runner_id, lease_token, attempt_count FROM research_jobs WHERE id = ?",
+    ).bind(created.job.id).first<{
+      status: string; leased_by_runner_id: string; lease_token: string; attempt_count: number;
+    }>();
+    expect(persisted).toMatchObject({
+      status: "running",
+      leased_by_runner_id: winners[0]?.runnerId,
+      lease_token: winners[0]?.job.leaseToken,
+      attempt_count: 1,
+    });
+  });
+
   it("rejects arbitrary prompt-shaped jobs and validates bounded task fields", async () => {
     const anonymous = await app.request(
       "https://potato.example/api/research/jobs",

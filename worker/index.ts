@@ -47,6 +47,25 @@ import {
   runnerHeartbeatInput,
 } from "./services/research-bridge";
 import { getLatestSleeperReport } from "./services/sleeper-reports";
+import {
+  PersonalRankingError,
+  getPersonalRankingBoard,
+  personalRankingQueryInput,
+  savePersonalRankingBoard,
+  savePersonalRankingInput,
+} from "./services/personal-rankings";
+import {
+  ResearchScheduleError,
+  createResearchSchedule,
+  createResearchScheduleInput,
+  deleteResearchSchedule,
+  enqueueDueResearchSchedules,
+  getResearchSchedule,
+  listResearchSchedules,
+  runResearchScheduleNow,
+  updateResearchSchedule,
+  updateResearchScheduleInput,
+} from "./services/research-schedules";
 
 type Bindings = {
   DB: D1Database;
@@ -425,6 +444,67 @@ app.get("/api/research/runner/status", async (context) => {
   return context.json({ runner: await getRunnerStatus(database(context)) });
 });
 
+app.get("/api/research/personal-rankings", async (context) => {
+  const input = personalRankingQueryInput.safeParse({
+    season: context.req.query("season"),
+    scoringFormat: context.req.query("scoringFormat"),
+    rankingType: context.req.query("rankingType"),
+  });
+  if (!input.success) {
+    return context.json(
+      { error: "invalid_request", message: input.error.issues[0]?.message ?? "Invalid personal ranking scope" },
+      400,
+    );
+  }
+  return context.json({ board: await getPersonalRankingBoard(database(context), input.data) });
+});
+
+app.put("/api/research/personal-rankings", async (context) => {
+  const input = savePersonalRankingInput.safeParse(await context.req.json().catch(() => null));
+  if (!input.success) {
+    return context.json(
+      { error: "invalid_request", message: input.error.issues[0]?.message ?? "Invalid personal rankings" },
+      400,
+    );
+  }
+  return context.json(await savePersonalRankingBoard(database(context), input.data));
+});
+
+app.post("/api/research/schedules", async (context) => {
+  const input = createResearchScheduleInput.safeParse(await context.req.json().catch(() => null));
+  if (!input.success) {
+    return context.json({ error: "invalid_request", message: input.error.issues[0]?.message ?? "Invalid research schedule" }, 400);
+  }
+  return context.json({ schedule: await createResearchSchedule(database(context), input.data) }, 201);
+});
+
+app.get("/api/research/schedules", async (context) => {
+  return context.json({ schedules: await listResearchSchedules(database(context)) });
+});
+
+app.get("/api/research/schedules/:scheduleId", async (context) => {
+  return context.json({ schedule: await getResearchSchedule(database(context), context.req.param("scheduleId")) });
+});
+
+app.patch("/api/research/schedules/:scheduleId", async (context) => {
+  const input = updateResearchScheduleInput.safeParse(await context.req.json().catch(() => null));
+  if (!input.success) {
+    return context.json({ error: "invalid_request", message: input.error.issues[0]?.message ?? "Invalid schedule update" }, 400);
+  }
+  return context.json({
+    schedule: await updateResearchSchedule(database(context), context.req.param("scheduleId"), input.data),
+  });
+});
+
+app.delete("/api/research/schedules/:scheduleId", async (context) => {
+  await deleteResearchSchedule(database(context), context.req.param("scheduleId"));
+  return context.body(null, 204);
+});
+
+app.post("/api/research/schedules/:scheduleId/run", async (context) => {
+  return context.json(await runResearchScheduleNow(database(context), context.req.param("scheduleId")), 201);
+});
+
 app.post("/api/runners/heartbeat", async (context) => {
   const body = await context.req.json().catch(() => null);
   const input = runnerHeartbeatInput.safeParse(body);
@@ -504,6 +584,14 @@ app.onError((error, context) => {
     return context.json({ error: error.code, message: error.message }, error.status);
   }
 
+  if (error instanceof ResearchScheduleError) {
+    return context.json({ error: error.code, message: error.message }, error.status);
+  }
+
+  if (error instanceof PersonalRankingError) {
+    return context.json({ error: error.code, message: error.message }, error.status);
+  }
+
   if (error instanceof z.ZodError) {
     return context.json(
       { error: "invalid_result", message: error.issues[0]?.message ?? "The runner returned an invalid result" },
@@ -519,4 +607,8 @@ app.onError((error, context) => {
 
 app.notFound((context) => context.json({ error: "not_found", message: "Route not found" }, 404));
 
-export default app;
+export async function scheduled(_controller: ScheduledController, env: Bindings, context: ExecutionContext) {
+  context.waitUntil(enqueueDueResearchSchedules(drizzle(env.DB, { schema })));
+}
+
+export default Object.assign(app, { scheduled });

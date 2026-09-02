@@ -2,7 +2,10 @@
   "name": "sloppy-potato-fantasy-football",
   "private": true,
   "version": "0.1.0",
+  "description": "Fantasy football research, rankings, and local agent runner.",
+  "author": "Ryan Smith",
   "type": "module",
+  "main": "dist-desktop/main/entry.js",
   "packageManager": "pnpm@11.24.0",
   "scripts": {
     "dev": "vite",
@@ -22,7 +25,14 @@
     "runner:once": "tsx runner/cli.ts once",
     "runner": "tsx runner/cli.ts run",
     "bridge:setup": "tsx runner/setup.ts",
-    "check": "pnpm typecheck && pnpm test && pnpm test:runner && pnpm build",
+    "desktop:build:shell": "tsup desktop/main/entry.ts --format esm --platform node --external electron --out-dir dist-desktop/main && tsup desktop/preload.ts --format cjs --platform node --external electron --out-dir dist-desktop && node desktop/scripts/copy-assets.mjs",
+    "desktop:build": "pnpm build && pnpm desktop:build:shell",
+    "desktop:dev": "pnpm desktop:build:shell && concurrently -k \"vite\" \"wait-on http-get://127.0.0.1:5173 && cross-env SLOPPY_POTATO_DESKTOP_DEV_URL=http://127.0.0.1:5173 electron .\"",
+    "desktop:test": "vitest run --config desktop/vitest.config.ts",
+    "desktop:typecheck": "tsc -p desktop/tsconfig.json --pretty false",
+    "desktop:pack": "pnpm desktop:build && electron-builder --win nsis portable",
+    "desktop:dist": "pnpm desktop:typecheck && pnpm desktop:test && pnpm desktop:pack",
+    "check": "pnpm typecheck && pnpm test && pnpm test:runner && pnpm desktop:typecheck && pnpm desktop:test && pnpm build && pnpm desktop:build:shell",
     "deploy": "pnpm check && pnpm db:migrate:remote && wrangler deploy"
   },
   "dependencies": {
@@ -48,12 +58,43 @@
     "@types/react": "latest",
     "@types/react-dom": "latest",
     "@vitejs/plugin-react": "latest",
+    "concurrently": "^10.0.5",
+    "cross-env": "^10.1.0",
     "drizzle-kit": "latest",
+    "electron": "^44.1.0",
+    "electron-builder": "^26.15.3",
     "jsdom": "latest",
+    "tsup": "^8.5.1",
     "tsx": "latest",
     "typescript": "latest",
     "vite": "latest",
     "vitest": "latest",
+    "wait-on": "^9.1.0",
     "wrangler": "latest"
+  },
+  "build": {
+    "appId": "com.sloppypotato.fantasyfootball",
+    "productName": "Sloppy Potato Fantasy Football",
+    "asar": true,
+    "files": [
+      "dist/client/**/*",
+      "dist-desktop/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release-desktop"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
   }
 }

@@ -392,9 +392,6 @@ export const rankingSnapshotEntries = sqliteTable(
   ],
 );
 
-// Personal ranking writes intentionally have no routes until a verified Access
-// identity can supply ownerIdentity. The owner value should be an issuer-qualified
-// subject, not an email address or a client-provided identifier.
 export const rankingLists = sqliteTable(
   "ranking_lists",
   {
@@ -409,6 +406,8 @@ export const rankingLists = sqliteTable(
     seedSnapshotId: text("seed_snapshot_id").references(() => rankingSnapshots.id, { onDelete: "set null" }),
     revision: integer("revision").notNull().default(0),
     settingsJson: text("settings_json").notNull().default("{}"),
+    writeToken: text("write_token"),
+    listKind: text("list_kind").notNull().default("custom"),
     archivedAt: integer("archived_at", { mode: "timestamp_ms" }),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().default(nowMs),
     updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull().default(nowMs),
@@ -508,6 +507,48 @@ export const researchJobEvents = sqliteTable(
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().default(nowMs),
   },
   (table) => [index("research_job_events_job_created_idx").on(table.jobId, table.createdAt)],
+);
+
+export const researchSchedules = sqliteTable(
+  "research_schedules",
+  {
+    id: text("id").primaryKey(),
+    ownerIdentity: text("owner_identity").notNull(),
+    name: text("name").notNull(),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    timezone: text("timezone").notNull(),
+    localTime: text("local_time").notNull(),
+    daysOfWeekJson: text("days_of_week_json").notNull().default("[0,1,2,3,4,5,6]"),
+    jobType: text("job_type").notNull(),
+    taskInputJson: text("task_input_json").notNull(),
+    nextRunAt: integer("next_run_at", { mode: "timestamp_ms" }),
+    lastRunAt: integer("last_run_at", { mode: "timestamp_ms" }),
+    lastJobId: text("last_job_id").references(() => researchJobs.id, { onDelete: "set null" }),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().default(nowMs),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull().default(nowMs),
+  },
+  (table) => [
+    index("research_schedules_due_idx").on(table.enabled, table.nextRunAt, table.id),
+    index("research_schedules_owner_idx").on(table.ownerIdentity, table.createdAt, table.id),
+  ],
+);
+
+export const researchScheduleRuns = sqliteTable(
+  "research_schedule_runs",
+  {
+    id: text("id").primaryKey(),
+    scheduleId: text("schedule_id").notNull().references(() => researchSchedules.id, { onDelete: "cascade" }),
+    scheduledFor: integer("scheduled_for", { mode: "timestamp_ms" }).notNull(),
+    runType: text("run_type").notNull(),
+    jobId: text("job_id").notNull().references(() => researchJobs.id, { onDelete: "cascade" }),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().default(nowMs),
+  },
+  (table) => [
+    uniqueIndex("research_schedule_runs_job_unique").on(table.jobId),
+    uniqueIndex("research_schedule_runs_scheduled_occurrence_unique")
+      .on(table.scheduleId, table.scheduledFor)
+      .where(sql`${table.runType} = 'scheduled'`),
+  ],
 );
 
 export const sleeperReports = sqliteTable(

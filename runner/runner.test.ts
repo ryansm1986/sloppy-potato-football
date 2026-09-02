@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RunnerApiClient } from "./api-client.js";
 import type { RunnerConfig } from "./config.js";
 import type { SpawnImplementation } from "./codex.js";
-import { runOneJob } from "./runner.js";
+import { RunnerController, runOneJob, type RunnerControllerPhase } from "./runner.js";
 import type { ResearchJob } from "./schemas.js";
 
 const workspace = join(tmpdir(), `sloppy-potato-runner-test-${process.pid}`);
@@ -68,6 +68,35 @@ function fakeApi() {
   };
 }
 
+function fakeLock() {
+  const release = vi.fn().mockResolvedValue(undefined);
+  return {
+    acquire: vi.fn().mockResolvedValue({
+      lockPath: join(workspace, "test.lock"),
+      metadata: { pid: process.pid, runnerId: config.runnerId, startedAt: new Date().toISOString(), ownerId: "test-owner" },
+      release,
+    }),
+    release,
+  };
+}
+
+async function waitForPhase(controller: RunnerController, phase: RunnerControllerPhase): Promise<void> {
+  if (controller.getSnapshot().phase === phase) return;
+  await new Promise<void>((resolve, reject) => {
+    let unsubscribe: () => void = () => undefined;
+    const timeout = setTimeout(() => {
+      unsubscribe();
+      reject(new Error(`Timed out waiting for ${phase}; current phase is ${controller.getSnapshot().phase}`));
+    }, 1_000);
+    unsubscribe = controller.subscribe((snapshot) => {
+      if (snapshot.phase !== phase) return;
+      clearTimeout(timeout);
+      unsubscribe();
+      resolve();
+    });
+  });
+}
+
 afterEach(async () => {
   await rm(workspace, { recursive: true, force: true });
   delete process.env.AGENT_RUNNER_TOKEN;
@@ -105,5 +134,141 @@ describe("local runner", () => {
       code: "INVALID_RESULT",
       retryable: true,
     }));
+  });
+
+  it("supports pause, resume, bounded redacted observations, and safe idle stop", async () => {
+    const token = config.token;
+    const api = fakeApi();
+    api.claim.mockResolvedValue(null);
+    const lock = fakeLock();
+    const controller = new RunnerController(config, {
+      api: api as unknown as RunnerApiClient,
+      acquireLock: lock.acquire,
+      maximumLogs: 3,
+    });
+    const phases: RunnerControllerPhase[] = [];
+    const unsubscribe = controller.subscribe((snapshot) => phases.push(snapshot.phase));
+
+    await controller.start();
+    await vi.waitFor(() => expect(api.claim).toHaveBeenCalledOnce());
+    controller.pauseAfterCurrentJob();
+    await waitForPhase(controller, "paused");
+    expect(controller.getSnapshot().currentJob).toBeNull();
+
+    await controller.resume();
+    await vi.waitFor(() => expect(api.claim).toHaveBeenCalledTimes(2));
+    controller.pauseAfterCurrentJob();
+    await waitForPhase(controller, "paused");
+    for (let index = 0; index < 5; index += 1) {
+      controller.pauseAfterCurrentJob();
+    }
+    const snapshot = controller.getSnapshot();
+    expect(snapshot.recentLogs).toHaveLength(3);
+    expect(JSON.stringify(snapshot)).not.toContain(token);
+    expect(phases).toContain("idle");
+    expect(phases).toContain("paused");
+
+    await expect(controller.stop()).resolves.toEqual({ stopped: true, deferredUntilCurrentJobFinishes: false });
+    expect(lock.release).toHaveBeenCalledOnce();
+    expect(controller.getSnapshot().phase).toBe("stopped");
+    unsubscribe();
+  });
+
+  it("does not terminate a claimed job and defers stop until its result is reported", async () => {
+    const api = fakeApi();
+    let finishCodex: (() => void) | undefined;
+    const implementation: SpawnImplementation = (_command, args) => {
+      const child = new EventEmitter() as EventEmitter & Partial<ChildProcessWithoutNullStreams>;
+      child.stdin = new PassThrough();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.kill = vi.fn(() => true);
+      child.stdin.once("finish", () => {
+        finishCodex = () => {
+          const outputIndex = args.indexOf("-o");
+          void writeFile(args[outputIndex + 1]!, JSON.stringify(validResult), "utf8")
+            .then(() => child.emit("close", 0));
+        };
+      });
+      return child as ChildProcessWithoutNullStreams;
+    };
+    const lock = fakeLock();
+    const controller = new RunnerController(config, {
+      api: api as unknown as RunnerApiClient,
+      spawn: implementation,
+      acquireLock: lock.acquire,
+    });
+
+    await controller.start();
+    await waitForPhase(controller, "busy");
+    expect(controller.getSnapshot().currentJob).toMatchObject({ id: job.id, type: "player_research" });
+    await expect(controller.stop()).resolves.toEqual({ stopped: false, deferredUntilCurrentJobFinishes: true });
+    expect(lock.release).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(finishCodex).toBeTypeOf("function"));
+    finishCodex?.();
+    await controller.waitUntilStopped();
+
+    expect(api.complete).toHaveBeenCalledOnce();
+    expect(api.fail).not.toHaveBeenCalled();
+    expect(lock.release).toHaveBeenCalledOnce();
+    expect(controller.getSnapshot().phase).toBe("stopped");
+  });
+
+  it("runs one queue check on demand and remains paused", async () => {
+    const api = fakeApi();
+    api.claim.mockResolvedValue(null);
+    const lock = fakeLock();
+    const controller = new RunnerController(config, {
+      api: api as unknown as RunnerApiClient,
+      acquireLock: lock.acquire,
+    });
+
+    await expect(controller.runNextOnce()).resolves.toBe(false);
+    await waitForPhase(controller, "paused");
+    expect(api.claim).toHaveBeenCalledOnce();
+    expect(lock.release).not.toHaveBeenCalled();
+    await controller.stop();
+    expect(lock.release).toHaveBeenCalledOnce();
+  });
+
+  it("stops safely while the single-instance lock is still being acquired", async () => {
+    const api = fakeApi();
+    api.claim.mockResolvedValue(null);
+    const lock = fakeLock();
+    let grantLock: ((value: Awaited<ReturnType<typeof lock.acquire>>) => void) | undefined;
+    const pendingLock = new Promise<Awaited<ReturnType<typeof lock.acquire>>>((resolve) => {
+      grantLock = resolve;
+    });
+    const controller = new RunnerController(config, {
+      api: api as unknown as RunnerApiClient,
+      acquireLock: () => pendingLock,
+    });
+
+    const starting = controller.start();
+    await waitForPhase(controller, "starting");
+    const stopping = controller.stop();
+    grantLock?.(await lock.acquire());
+    await starting;
+    await expect(stopping).resolves.toEqual({ stopped: true, deferredUntilCurrentJobFinishes: false });
+    expect(api.claim).not.toHaveBeenCalled();
+    expect(lock.release).toHaveBeenCalledOnce();
+  });
+
+  it("automatically resumes polling after a network error", async () => {
+    const api = fakeApi();
+    api.claim.mockReset();
+    api.claim.mockRejectedValueOnce(new Error(`network unavailable token=${config.token}`)).mockResolvedValue(null);
+    const lock = fakeLock();
+    const controller = new RunnerController({ ...config, pollIntervalMs: 5 }, {
+      api: api as unknown as RunnerApiClient,
+      acquireLock: lock.acquire,
+    });
+
+    await controller.start();
+    await vi.waitFor(() => expect(api.claim.mock.calls.length).toBeGreaterThanOrEqual(2));
+    expect(JSON.stringify(controller.getSnapshot().recentLogs)).not.toContain(config.token);
+    controller.pauseAfterCurrentJob();
+    await waitForPhase(controller, "paused");
+    await controller.stop();
   });
 });

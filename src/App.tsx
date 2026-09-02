@@ -17,8 +17,8 @@ import {
   Trophy,
   Users,
 } from "lucide-react";
-import type { ComponentType } from "react";
-import { NavLink, Route, Routes } from "react-router";
+import { useEffect, type ComponentType } from "react";
+import { NavLink, Route, Routes, useNavigate } from "react-router";
 import { lineup, movers, news } from "./data";
 import RankingsPage from "./features/rankings/RankingsPage";
 import ResearchDeskPage from "./features/research/ResearchDeskPage";
@@ -114,6 +114,7 @@ function MobileHeader() {
 function AppShell() {
   return (
     <div className="app-shell">
+      <DesktopNavigationBridge />
       <Sidebar />
       <MobileHeader />
       <main className="main-content">
@@ -125,6 +126,7 @@ function AppShell() {
           <Route path="sleepers" element={<SleepersPage />} />
           <Route path="draft" element={<ComingSoon title="Draft Board" icon={ClipboardList} />} />
           <Route path="research" element={<ResearchDeskPage />} />
+          <Route path="research/schedules" element={<ResearchDeskPage />} />
         </Routes>
       </main>
       <nav className="mobile-nav" aria-label="Mobile navigation">
@@ -132,6 +134,15 @@ function AppShell() {
       </nav>
     </div>
   );
+}
+
+function DesktopNavigationBridge() {
+  const navigate = useNavigate();
+  useEffect(() => window.sloppyPotatoDesktop?.navigation.onRequest(({ path }) => {
+    navigate(path);
+    if (path === "/research/schedules") requestAnimationFrame(() => document.getElementById("research-schedules")?.scrollIntoView({ behavior: "smooth" }));
+  }), [navigate]);
+  return null;
 }
 
 function Huddle() {

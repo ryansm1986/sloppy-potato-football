@@ -35,6 +35,19 @@ function mockBridge(initialJobs: ResearchJob[] = [], runnerResponse = runner) {
     const url = String(input);
     if (url.startsWith("/api/rankings/snapshots")) return Response.json({ snapshots: [] });
     if (url === "/api/research/runner/status") return Response.json({ runner: runnerResponse });
+    if (url === "/api/research/schedules" && init?.method === "POST") {
+      const body = JSON.parse(String(init.body));
+      return Response.json({ schedule: {
+        id: "schedule-1",
+        ...body,
+        nextRunAt: "2026-09-07T14:00:00.000Z",
+        lastRunAt: null,
+        lastJobId: null,
+        createdAt: "2026-09-02T12:00:00.000Z",
+        updatedAt: "2026-09-02T12:00:00.000Z",
+      } }, { status: 201 });
+    }
+    if (url === "/api/research/schedules") return Response.json({ schedules: [] });
     if (url.startsWith("/api/research/jobs/job-1/retry")) return Response.json({ job: { ...failedJob, status: "queued", error: null } });
     if (url === "/api/research/jobs" && init?.method === "POST") {
       const body = JSON.parse(String(init.body)) as { type: ResearchJob["type"]; subject?: string };
@@ -186,6 +199,33 @@ describe("ResearchDeskPage", () => {
 
     fireEvent.change(limit, { target: { value: "501" } });
     expect(screen.getByRole("button", { name: /queue research/i })).toBeDisabled();
+  });
+
+  it("creates a cloud schedule from the current bounded assignment", async () => {
+    window.localStorage.setItem(RESEARCH_OWNER_TOKEN_KEY, "owner-secret");
+    const fetchMock = mockBridge();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<MemoryRouter><ResearchDeskPage localDevelopmentOverride={false} /></MemoryRouter>);
+
+    fireEvent.click(screen.getByLabelText("Rankings research"));
+    fireEvent.change(screen.getByLabelText("Number of players"), { target: { value: "250" } });
+    fireEvent.change(screen.getByLabelText("Schedule name"), { target: { value: "Monday rankings" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: /schedule current assignment/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: /schedule current assignment/i }));
+
+    expect(await screen.findByText(/Scheduled Monday rankings/)).toBeInTheDocument();
+    const call = fetchMock.mock.calls.find(([url, init]) => url === "/api/research/schedules" && init?.method === "POST");
+    expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
+      name: "Monday rankings",
+      enabled: true,
+      daysOfWeek: [1, 2, 3, 4, 5],
+      job: {
+        type: "rankings_research",
+        rankingLimit: 250,
+        leagueSize: 12,
+        discoverNewSources: true,
+      },
+    });
   });
 
   it("shares the selected league size and submits it for every assignment type", async () => {

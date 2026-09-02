@@ -1,6 +1,7 @@
 import {
   AlertCircle,
   Bot,
+  CalendarClock,
   CheckCircle2,
   CircleDashed,
   Clock3,
@@ -10,6 +11,7 @@ import {
   ListOrdered,
   LoaderCircle,
   Newspaper,
+  Play,
   RefreshCw,
   Save,
   Send,
@@ -34,19 +36,27 @@ import {
 } from "../league-size";
 import {
   createResearchJob,
+  createResearchSchedule,
+  deleteResearchSchedule,
   fetchResearchJobs,
+  fetchResearchSchedules,
   fetchRunnerStatus,
   isLocalDevelopment,
   RESEARCH_OWNER_TOKEN_KEY,
   ResearchApiError,
   retryResearchJob,
+  runResearchScheduleNow,
   runnerDisplayState,
+  updateResearchSchedule,
+  type CreateResearchJob,
   type ResearchJob,
+  type ResearchSchedule,
   type ResearchJobStatus,
   type ResearchJobType,
   type RunnerState,
   type RunnerStatus,
 } from "./research-api";
+import DesktopRunnerControls from "./DesktopRunnerControls";
 
 type BridgeAccessState = "locked" | "checking" | "authorized" | "denied";
 type RunnerDisplayState = RunnerState | "locked";
@@ -65,6 +75,19 @@ const JOB_STATUS_LABELS: Record<ResearchJobStatus, string> = {
   failed: "Failed",
   cancelled: "Cancelled",
 };
+
+const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+const SCHEDULE_TIMES = Array.from({ length: 96 }, (_, index) => {
+  const hour = Math.floor(index / 4);
+  const minute = (index % 4) * 15;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+});
+
+function nextQuarterHour(): string {
+  const value = new Date(Date.now() + 15 * 60_000);
+  value.setMinutes(Math.ceil(value.getMinutes() / 15) * 15, 0, 0);
+  return `${String(value.getHours()).padStart(2, "0")}:${String(value.getMinutes()).padStart(2, "0")}`;
+}
 
 function loadToken(): string {
   return window.localStorage.getItem(RESEARCH_OWNER_TOKEN_KEY) ?? "";
@@ -145,7 +168,13 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
   const [leagueSize, setLeagueSize] = useState<LeagueSize>(() =>
     typeof window === "undefined" ? DEFAULT_LEAGUE_SIZE : loadLeagueSize(window.localStorage));
   const [discoverNewSources, setDiscoverNewSources] = useState(true);
+  const [sleepersPerPosition, setSleepersPerPosition] = useState(8);
   const [jobs, setJobs] = useState<ResearchJob[]>([]);
+  const [schedules, setSchedules] = useState<ResearchSchedule[]>([]);
+  const [scheduleName, setScheduleName] = useState("Weekly rankings refresh");
+  const [scheduleTime, setScheduleTime] = useState(nextQuarterHour);
+  const [scheduleDays, setScheduleDays] = useState<number[]>([1, 2, 3, 4, 5]);
+  const [scheduleBusy, setScheduleBusy] = useState<string | null>(null);
   const [runner, setRunner] = useState<RunnerStatus | null>(null);
   const [snapshots, setSnapshots] = useState<AgentRankingSnapshot[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
@@ -162,19 +191,24 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
     const validRankingLimit = Number.isInteger(rankingLimit) && rankingLimit >= 1 && rankingLimit <= 500;
     if (jobType === "source_refresh") return Boolean(source.trim()) && validRankingLimit;
     if (jobType === "player_research") return Boolean(subject.trim());
+    if (jobType === "sleepers_research") return Number.isInteger(sleepersPerPosition) && sleepersPerPosition >= 1 && sleepersPerPosition <= 20;
     return validRankingLimit;
-  }, [authorized, isSubmitting, jobType, rankingLimit, source, subject]);
+  }, [authorized, isSubmitting, jobType, rankingLimit, sleepersPerPosition, source, subject]);
+
+  const canSchedule = canSubmit && Boolean(scheduleName.trim()) && scheduleDays.length > 0 && scheduleBusy === null;
 
   const refreshBridge = useCallback(async (signal?: AbortSignal) => {
     if (!canAttemptAccess) return;
     setIsLoading(true);
     try {
-      const [nextJobs, nextRunner] = await Promise.all([
+      const [nextJobs, nextRunner, nextSchedules] = await Promise.all([
         fetchResearchJobs(ownerToken, signal),
         fetchRunnerStatus(ownerToken, signal),
+        fetchResearchSchedules(ownerToken, signal).catch(() => []),
       ]);
       setJobs(nextJobs);
       setRunner(nextRunner);
+      setSchedules(nextSchedules);
       setAccessState("authorized");
       setPollError(null);
     } catch (error) {
@@ -212,6 +246,19 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
     };
   }, [canAttemptAccess, refreshBridge, tokenRevision]);
 
+  function currentJobInput(): CreateResearchJob {
+    return {
+      type: jobType,
+      scoringFormat: "ppr",
+      rankingType: "redraft",
+      leagueSize,
+      ...(jobType === "player_research" ? { subject: subject.trim() } : {}),
+      ...(jobType === "source_refresh" ? { sourceName: source.trim(), rankingLimit } : {}),
+      ...(jobType === "rankings_research" ? { position, rankingLimit, discoverNewSources } : {}),
+      ...(jobType === "sleepers_research" ? { sleepersPerPosition, discoverNewSources } : {}),
+    };
+  }
+
   function saveToken() {
     const cleanToken = tokenDraft.trim();
     if (cleanToken) window.localStorage.setItem(RESEARCH_OWNER_TOKEN_KEY, cleanToken);
@@ -243,17 +290,7 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
     setIsSubmitting(true);
     setNotice(null);
     try {
-      const job = await createResearchJob(ownerToken, {
-        type: jobType,
-        scoringFormat: "ppr",
-        rankingType: "redraft",
-        leagueSize,
-        ...(jobType === "player_research" ? { subject: subject.trim() } : {}),
-        ...(jobType === "source_refresh" ? { sourceName: source.trim() } : {}),
-        ...(jobType === "rankings_research" ? { position } : {}),
-        ...(jobType === "rankings_research" ? { discoverNewSources } : {}),
-        ...(jobType !== "player_research" ? { rankingLimit } : {}),
-      });
+      const job = await createResearchJob(ownerToken, currentJobInput());
       setJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]);
       if (jobType === "player_research") setSubject("");
       setNotice("Research job queued. Your local runner will claim it when connected.");
@@ -261,6 +298,68 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
       setNotice(error instanceof Error ? error.message : "Could not queue this research job.");
     } finally {
       setIsSubmitting(false);
+    }
+  }
+
+  async function addSchedule() {
+    if (!canSchedule) return;
+    setScheduleBusy("create");
+    setNotice(null);
+    try {
+      const schedule = await createResearchSchedule(ownerToken, {
+        name: scheduleName.trim(),
+        enabled: true,
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Chicago",
+        localTime: scheduleTime,
+        daysOfWeek: scheduleDays,
+        job: currentJobInput(),
+      });
+      setSchedules((current) => [...current, schedule]);
+      setNotice(`Scheduled ${schedule.name}. Jobs will wait safely if your desktop runner is offline.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not create this research schedule.");
+    } finally {
+      setScheduleBusy(null);
+    }
+  }
+
+  async function toggleSchedule(schedule: ResearchSchedule) {
+    setScheduleBusy(schedule.id);
+    try {
+      const updated = await updateResearchSchedule(ownerToken, schedule.id, { enabled: !schedule.enabled });
+      setSchedules((current) => current.map((item) => item.id === updated.id ? updated : item));
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not update this schedule.");
+    } finally {
+      setScheduleBusy(null);
+    }
+  }
+
+  async function runSchedule(schedule: ResearchSchedule) {
+    setScheduleBusy(schedule.id);
+    try {
+      const job = await runResearchScheduleNow(ownerToken, schedule.id);
+      setJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]);
+      setNotice(`${schedule.name} was queued to run now.`);
+      await refreshBridge();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not run this schedule.");
+    } finally {
+      setScheduleBusy(null);
+    }
+  }
+
+  async function removeSchedule(schedule: ResearchSchedule) {
+    if (!window.confirm(`Delete the schedule “${schedule.name}”?`)) return;
+    setScheduleBusy(schedule.id);
+    try {
+      await deleteResearchSchedule(ownerToken, schedule.id);
+      setSchedules((current) => current.filter((item) => item.id !== schedule.id));
+      setNotice(`Deleted ${schedule.name}.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not delete this schedule.");
+    } finally {
+      setScheduleBusy(null);
     }
   }
 
@@ -303,10 +402,10 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
             <form onSubmit={submit}>
               <fieldset className="research-job-types">
                 <legend>Assignment type</legend>
-                {(["player_research", "rankings_research", "source_refresh"] as ResearchJobType[]).map((type) => (
+                {(["player_research", "rankings_research", "sleepers_research", "source_refresh"] as ResearchJobType[]).map((type) => (
                   <label key={type} className={jobType === type ? "is-selected" : ""}>
                     <input type="radio" name="jobType" value={type} checked={jobType === type} onChange={() => setJobType(type)} />
-                    {type === "source_refresh" ? <Newspaper size={14} /> : type === "rankings_research" ? <ListOrdered size={14} /> : <FileSearch size={14} />}
+                    {type === "source_refresh" ? <Newspaper size={14} /> : type === "rankings_research" ? <ListOrdered size={14} /> : type === "sleepers_research" ? <Telescope size={14} /> : <FileSearch size={14} />}
                     <span>{JOB_TYPE_LABELS[type]}</span>
                   </label>
                 ))}
@@ -351,7 +450,7 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
                   <small>Creates a sourced PPR redraft ranking snapshot for the selected scope.</small>
                 </label>
               )}
-              {jobType !== "player_research" && (
+              {(jobType === "source_refresh" || jobType === "rankings_research") && (
                 <label className="research-field research-field--compact">
                   <span>Number of players</span>
                   <input
@@ -366,13 +465,20 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
                   <small>Request a Top N list from 1–500. Larger lists take longer and depend on how much of the named source is publicly verifiable.</small>
                 </label>
               )}
-              {jobType === "rankings_research" && (
+              {jobType === "sleepers_research" && (
+                <label className="research-field research-field--compact">
+                  <span>Sleepers per position</span>
+                  <input aria-label="Sleepers per position" type="number" min={1} max={20} step={1} value={sleepersPerPosition} onChange={(event) => setSleepersPerPosition(Number(event.target.value))} />
+                  <small>Collect separate QB, RB, WR, and TE recommendations with direct source evidence.</small>
+                </label>
+              )}
+              {(jobType === "rankings_research" || jobType === "sleepers_research") && (
                 <label className="source-scout-toggle">
                   <input type="checkbox" checked={discoverNewSources} onChange={(event) => setDiscoverNewSources(event.target.checked)} />
                   <span className="source-scout-toggle__control" aria-hidden="true"><i /></span>
                   <span>
                     <strong>Scout new publishers</strong>
-                    <small>Try reputable ranking publishers outside prior reports while retaining strong known sources.</small>
+                    <small>Try reputable publishers outside prior reports while retaining strong known sources.</small>
                   </span>
                 </label>
               )}
@@ -396,9 +502,38 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
               <div><p className="eyebrow">Latest result</p><h2>No completed ranking research yet</h2><p>A completed ranking job will publish a structured snapshot here and in the Rankings Center.</p></div>
             </section>
           )}
+
+          <section className="panel research-schedules" aria-label="Research schedules" id="research-schedules">
+            <header className="panel-header">
+              <div><p className="eyebrow">Cloud scheduler</p><h2>Automatic Updates</h2></div>
+              <span className="status-pill"><CalendarClock size={12} /> {schedules.length} saved</span>
+            </header>
+            <div className="schedule-composer">
+              <label><span>Schedule name</span><input aria-label="Schedule name" value={scheduleName} maxLength={100} onChange={(event) => setScheduleName(event.target.value)} /></label>
+              <label><span>Local time</span><select aria-label="Schedule time" value={scheduleTime} onChange={(event) => setScheduleTime(event.target.value)}>{SCHEDULE_TIMES.map((time) => <option key={time} value={time}>{new Date(`2000-01-01T${time}:00`).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</option>)}</select></label>
+              <div className="schedule-days" role="group" aria-label="Schedule days">
+                {DAY_LABELS.map((label, day) => <button className={scheduleDays.includes(day) ? "is-active" : ""} aria-pressed={scheduleDays.includes(day)} key={label} type="button" onClick={() => setScheduleDays((current) => current.includes(day) ? current.filter((value) => value !== day) : [...current, day].sort())}>{label}</button>)}
+              </div>
+              <button className="button button--primary" type="button" disabled={!canSchedule} onClick={() => { void addSchedule(); }}><CalendarClock size={13} /> {scheduleBusy === "create" ? "Scheduling…" : "Schedule current assignment"}</button>
+              <small>Uses your current assignment settings and local timezone. Cloudflare queues due work every 15 minutes; an offline runner processes it when it reconnects.</small>
+            </div>
+            <div className="schedule-list">
+              {schedules.length === 0 ? <p>No automatic research schedules yet.</p> : schedules.map((schedule) => (
+                <article key={schedule.id} className={!schedule.enabled ? "is-disabled" : ""}>
+                  <div><strong>{schedule.name}</strong><span>{DAY_LABELS.filter((_, day) => schedule.daysOfWeek.includes(day)).join(" · ")} at {new Date(`2000-01-01T${schedule.localTime}:00`).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span><small>{JOB_TYPE_LABELS[schedule.job.type]} · {schedule.job.leagueSize ?? 12} teams · Next {schedule.nextRunAt ? new Date(schedule.nextRunAt).toLocaleString() : "when enabled"}</small></div>
+                  <div>
+                    <button type="button" disabled={scheduleBusy === schedule.id} onClick={() => { void toggleSchedule(schedule); }}>{schedule.enabled ? "Pause" : "Enable"}</button>
+                    <button type="button" disabled={scheduleBusy === schedule.id} onClick={() => { void runSchedule(schedule); }}><Play size={12} /> Run now</button>
+                    <button type="button" disabled={scheduleBusy === schedule.id} aria-label={`Delete ${schedule.name}`} onClick={() => { void removeSchedule(schedule); }}><Trash2 size={12} /></button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
         </div>
 
         <aside className="research-side">
+          <DesktopRunnerControls />
           <section className="panel job-queue" aria-label="Research job queue">
             <header><div><p className="eyebrow">Cloud queue</p><h2>Job Queue</h2></div><span>{jobs.length}</span></header>
             {!authorized ? (
