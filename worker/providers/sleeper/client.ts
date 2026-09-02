@@ -30,13 +30,18 @@ export class SleeperApiError extends Error {
 
 type Fetcher = typeof fetch;
 
+// Cloudflare's native fetch requires its global `this` binding. Wrapping it also
+// keeps the default path easy to replace in tests without passing an unbound host
+// function through the client.
+const defaultFetcher: Fetcher = (input, init) => globalThis.fetch(input, init);
+
 const wait = (milliseconds: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
 export class SleeperClient {
   constructor(
     private readonly baseUrl = DEFAULT_SLEEPER_API_BASE_URL,
-    private readonly fetcher: Fetcher = fetch,
+    private readonly fetcher: Fetcher = defaultFetcher,
   ) {}
 
   getLeague(leagueId: string): Promise<SleeperLeague> {

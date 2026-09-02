@@ -30,6 +30,7 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "drizzle-orm": "latest",
+    "exceljs": "4.4.0",
     "hono": "latest",
     "lucide-react": "latest",
     "react": "latest",
@@ -49,8 +50,8 @@
     "@vitejs/plugin-react": "latest",
     "drizzle-kit": "latest",
     "jsdom": "latest",
-    "typescript": "latest",
     "tsx": "latest",
+    "typescript": "latest",
     "vite": "latest",
     "vitest": "latest",
     "wrangler": "latest"

@@ -69,6 +69,7 @@ export const sleeperDraftPickSchema = z.object({
 
 export const sleeperPlayerSchema = z.object({
   player_id: z.string().optional(),
+  active: z.boolean().nullish(),
   sport: z.string().optional(),
   first_name: z.string().nullish(),
   last_name: z.string().nullish(),

@@ -5,6 +5,9 @@ import RankingsPage from "./RankingsPage";
 import { RESEARCH_OWNER_TOKEN_KEY } from "../research/research-api";
 import { RANKINGS_PREFERENCES_STORAGE_KEY } from "./ranking-preferences";
 
+const exportRankingsMock = vi.hoisted(() => vi.fn());
+vi.mock("./rankings-export", () => ({ exportRankingsToExcel: exportRankingsMock }));
+
 const agentSnapshot = {
   id: "snapshot-1",
   source: { id: "source-1", canonicalKey: "agent:codex-rank-agent", slug: "codex-rank-agent", name: "Codex Rank Agent", kind: "agent" as const, provider: "codex" },
@@ -54,7 +57,11 @@ const multiPositionSnapshot = {
 };
 
 describe("RankingsPage", () => {
-  beforeEach(() => window.localStorage.clear());
+  beforeEach(() => {
+    window.localStorage.clear();
+    exportRankingsMock.mockReset();
+    exportRankingsMock.mockResolvedValue("sloppy-potato-rankings-12-team-2026-09-02.xlsx");
+  });
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
@@ -64,11 +71,73 @@ describe("RankingsPage", () => {
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ snapshots: [] })));
     render(<MemoryRouter><RankingsPage /></MemoryRouter>);
 
+    expect(screen.queryByText(/two independent workspaces/i)).not.toBeInTheDocument();
     expect(await screen.findByText("No agent snapshots yet")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Move Ja'Marr Chase up" }));
     expect(screen.getByText(/Moved Ja'Marr Chase from rank 2 to rank 1/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /save my rankings/i }));
     expect(screen.getByText(/Saved your personal rankings on this device/)).toBeInTheDocument();
+  });
+
+  it("hydrates a comprehensive canonical board and quick-moves a filtered player to an exact overall rank", async () => {
+    const catalogPlayers = [
+      canonicalPlayer("canonical-chase", "Ja'Marr Chase", "WR", "CIN"),
+      canonicalPlayer("canonical-nabers", "Malik Nabers", "WR", "NYG"),
+      canonicalPlayer("canonical-kicker", "Test Kicker", "K", "DAL"),
+      { ...canonicalPlayer("canonical-defense", "Denver Broncos", "DEF", "DEN"), isTeamDefense: true },
+    ];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/players?")) return Response.json({ players: catalogPlayers, nextCursor: null });
+      return Response.json({ snapshots: [agentSnapshot] });
+    }));
+    render(<MemoryRouter><RankingsPage /></MemoryRouter>);
+
+    const personal = screen.getByRole("region", { name: "My Rankings" });
+    expect(await within(personal).findByText("Loaded 4 active NFL fantasy players into your board.")).toBeInTheDocument();
+    await waitFor(() => expect(within(personal).queryByText("Bijan Robinson")).not.toBeInTheDocument());
+    expect(within(personal).getByText("Test Kicker")).toBeInTheDocument();
+    expect(within(personal).getByRole("button", { name: "DST" })).toBeInTheDocument();
+
+    fireEvent.click(within(personal).getByRole("button", { name: "DST" }));
+    expect(within(personal).getByLabelText("Overall rank 4; DST rank 1")).toBeInTheDocument();
+    fireEvent.click(within(personal).getByRole("button", { name: "Move Denver Broncos to an exact rank" }));
+    const dialog = screen.getByRole("dialog", { name: "Move Denver Broncos" });
+    const input = within(dialog).getByLabelText("Move to rank");
+    expect(input).toHaveFocus();
+    expect(input).toHaveAttribute("max", "4");
+    fireEvent.change(input, { target: { value: "1" } });
+    fireEvent.submit(dialog);
+
+    expect(within(personal).getByLabelText("Overall rank 1; DST rank 1")).toBeInTheDocument();
+    expect(screen.getByText("Moved Denver Broncos from rank 4 to rank 1")).toBeInTheDocument();
+    expect(JSON.parse(window.localStorage.getItem("spff:rankings:ppr-redraft:v1") ?? "[]")[0]).toMatchObject({ id: "canonical-defense", position: "DST" });
+
+    fireEvent.click(within(personal).getByRole("button", { name: "Change Denver Broncos overall rank" }));
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("exports the complete rankings workspace and reports success or failure", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ snapshots: [agentSnapshot, secondExpertSnapshot] })));
+    render(<MemoryRouter><RankingsPage /></MemoryRouter>);
+
+    await screen.findByRole("option", { name: "Expert B" });
+    let finishExport!: (filename: string) => void;
+    exportRankingsMock.mockImplementationOnce(() => new Promise((resolve) => { finishExport = resolve; }));
+    fireEvent.click(screen.getByRole("button", { name: "Export Excel" }));
+    expect(screen.getByRole("button", { name: "Exporting…" })).toBeDisabled();
+    await waitFor(() => expect(exportRankingsMock).toHaveBeenCalledWith(expect.objectContaining({
+      leagueSize: 12,
+      rankings: expect.arrayContaining([expect.objectContaining({ name: "Bijan Robinson" })]),
+      snapshots: expect.arrayContaining([expect.objectContaining({ id: "snapshot-1" }), expect.objectContaining({ id: "snapshot-2" })]),
+    })));
+    finishExport("sloppy-potato-rankings-12-team-2026-09-02.xlsx");
+    expect(await screen.findByText("Exported sloppy-potato-rankings-12-team-2026-09-02.xlsx")).toHaveAttribute("role", "status");
+
+    exportRankingsMock.mockRejectedValueOnce(new Error("Workbook unavailable"));
+    fireEvent.click(screen.getByRole("button", { name: "Export Excel" }));
+    expect(await screen.findByText("Export failed: Workbook unavailable")).toHaveAttribute("role", "status");
   });
 
   it("keeps agent rankings separate until a confirmed copy", async () => {
@@ -373,3 +442,18 @@ describe("RankingsPage", () => {
     expect(within(agent).getByRole("link", { name: /Example Sports/i })).toHaveAttribute("href", "https://example.com/nabers");
   });
 });
+
+function canonicalPlayer(id: string, fullName: string, position: string, nflTeam: string) {
+  return {
+    id,
+    sport: "nfl",
+    fullName,
+    searchName: fullName.toLowerCase().replace(/[^a-z0-9]/g, ""),
+    position,
+    fantasyPositions: [position],
+    nflTeam,
+    status: "Active",
+    injuryStatus: null,
+    isTeamDefense: false,
+  };
+}

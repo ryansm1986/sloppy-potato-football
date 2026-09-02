@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, like, or } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNotNull, like, or } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 import { Hono } from "hono";
 import { createMiddleware } from "hono/factory";
@@ -15,6 +15,7 @@ import {
 import * as schema from "./db/schema";
 import { SleeperApiError, SleeperClient } from "./providers/sleeper/client";
 import { ImportInProgressError, importSleeperLeague } from "./services/sleeper-import";
+import { syncSleeperPlayerCatalog } from "./services/player-catalog";
 import {
   RankingSnapshotError,
   createRankingSnapshot,
@@ -121,6 +122,27 @@ function database(context: { env: Bindings }) {
   return drizzle(context.env.DB, { schema });
 }
 
+type PlayerCursor = { searchName: string; id: string };
+
+function encodePlayerCursor(cursor: PlayerCursor): string {
+  return btoa(JSON.stringify(cursor)).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
+
+function decodePlayerCursor(value: string): PlayerCursor | null {
+  try {
+    const normalized = value.replaceAll("-", "+").replaceAll("_", "/");
+    const decoded = JSON.parse(atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "="))) as unknown;
+    if (
+      typeof decoded !== "object" || decoded === null
+      || !("searchName" in decoded) || typeof decoded.searchName !== "string"
+      || !("id" in decoded) || typeof decoded.id !== "string" || !decoded.id
+    ) return null;
+    return { searchName: decoded.searchName, id: decoded.id };
+  } catch {
+    return null;
+  }
+}
+
 app.get("/api/health", async (context) => {
   const databaseResult = await context.env.DB.prepare("SELECT 1 AS ok").first<{ ok: number }>();
   return context.json({
@@ -206,12 +228,23 @@ app.get("/api/leagues/:leagueId", async (context) => {
   });
 });
 
+app.post("/api/players/sync", requireResearchOwner, async (context) => {
+  const client = new SleeperClient(context.env.SLEEPER_API_BASE_URL);
+  return context.json(await syncSleeperPlayerCatalog(database(context), client));
+});
+
 app.get("/api/players", async (context) => {
   const db = database(context);
   const query = context.req.query("query")?.trim().toLowerCase() ?? "";
   const position = context.req.query("position")?.trim().toUpperCase();
-  const requestedLimit = Number(context.req.query("limit") ?? 50);
-  const limit = Number.isFinite(requestedLimit) ? Math.min(Math.max(Math.trunc(requestedLimit), 1), 100) : 50;
+  const fantasy = context.req.query("fantasy") === "true";
+  const requestedLimit = Number(context.req.query("limit") ?? 100);
+  const limit = Number.isFinite(requestedLimit) ? Math.min(Math.max(Math.trunc(requestedLimit), 1), 500) : 100;
+  const cursorValue = context.req.query("cursor")?.trim() || context.req.query("after")?.trim();
+  const cursor = cursorValue ? decodePlayerCursor(cursorValue) : null;
+  if (cursorValue && !cursor) {
+    return context.json({ error: "invalid_request", message: "Invalid player pagination cursor" }, 400);
+  }
   const conditions = [];
   if (query) {
     conditions.push(
@@ -222,19 +255,47 @@ app.get("/api/players", async (context) => {
     );
   }
   if (position) conditions.push(eq(players.position, position));
+  if (fantasy) {
+    conditions.push(
+      and(
+        eq(players.sport, "nfl"),
+        isNotNull(players.nflTeam),
+        or(
+          inArray(players.position, ["QB", "RB", "WR", "TE", "K", "DEF", "DST"]),
+          eq(players.isTeamDefense, true),
+        )!,
+      )!,
+    );
+  }
+  if (cursor) {
+    conditions.push(or(
+      gt(players.searchName, cursor.searchName),
+      and(eq(players.searchName, cursor.searchName), gt(players.id, cursor.id)),
+    )!);
+  }
 
   const rows = await db
     .select()
     .from(players)
     .where(conditions.length > 0 ? and(...conditions) : undefined)
-    .orderBy(asc(players.fullName))
-    .limit(limit);
+    .orderBy(asc(players.searchName), asc(players.id))
+    .limit(limit + 1);
+
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  const last = page.at(-1);
+  const nextCursor = hasMore && last
+    ? encodePlayerCursor({ searchName: last.searchName, id: last.id })
+    : null;
 
   return context.json({
-    players: rows.map((player) => ({
+    players: page.map((player) => ({
       ...player,
       fantasyPositions: JSON.parse(player.fantasyPositionsJson),
     })),
+    nextCursor,
+    nextAfter: nextCursor,
+    pagination: { limit, hasMore, nextCursor },
   });
 });
 

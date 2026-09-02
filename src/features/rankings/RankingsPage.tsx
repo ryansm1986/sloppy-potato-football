@@ -29,7 +29,9 @@ import {
   Clock3,
   Columns2,
   ExternalLink,
+  FileSpreadsheet,
   GripVertical,
+  Hash,
   List,
   Newspaper,
   RefreshCw,
@@ -59,6 +61,7 @@ import {
   type ResearchJob,
 } from "../research/research-api";
 import { fetchAgentRankings, type AgentRankingSnapshot } from "./agent-api";
+import { fetchFantasyPlayerCatalog, type CanonicalFantasyPlayer } from "./player-api";
 import {
   aggregateRankingSnapshots,
   isSnapshotInScope,
@@ -78,17 +81,21 @@ import {
   type RankingsPreferences,
 } from "./ranking-preferences";
 import { derivePositionRanks, type PositionRank } from "./ranking-position";
+import { exportRankingsToExcel } from "./rankings-export";
 import {
   applyAgentOrder,
-  loadPersonalRankings,
+  hydratePersonalRankings,
+  loadSavedPersonalRankings,
   moveRanking,
+  moveRankingTo,
   reorderRankings,
+  resetPersonalRankings,
   savePersonalRankings,
   starterRankings,
   type RankingPlayer,
 } from "./ranking-store";
 
-const positions = ["ALL", "QB", "RB", "WR", "TE"] as const;
+const positions = ["ALL", "QB", "RB", "WR", "TE", "K", "DST"] as const;
 
 type WorkspaceDividerProps = {
   leftWorkspaceName: string;
@@ -179,17 +186,19 @@ function SortableRankingRow({
   positionRank,
   total,
   onMove,
+  onMoveToRank,
 }: {
   player: RankingPlayer;
   rank: number;
   positionRank: PositionRank;
   total: number;
   onMove: (playerId: string, direction: "up" | "down") => void;
+  onMoveToRank: (playerId: string) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: player.id,
   });
-  const difference = player.consensusRank - rank;
+  const difference = player.consensusRank === null ? null : player.consensusRank - rank;
 
   return (
     <li
@@ -207,7 +216,7 @@ function SortableRankingRow({
         <GripVertical size={17} />
       </button>
       <span className="ranking-rank-pair" aria-label={`Overall rank ${rank}; ${positionRank.position} rank ${positionRank.rank}`}>
-        <span><small>OVR</small><strong className="ranking-number">{rank}</strong></span>
+        <span><small>OVR</small><button className="ranking-number-button" type="button" aria-label={`Change ${player.name} overall rank`} onClick={() => onMoveToRank(player.id)}><strong className="ranking-number">{rank}</strong></button></span>
         <span><small>{positionRank.position}</small><strong className="ranking-position-number">#{positionRank.rank}</strong></span>
       </span>
       <span className="position-orb">{player.position}</span>
@@ -217,12 +226,20 @@ function SortableRankingRow({
       </div>
       <div className="ranking-comparison">
         <span>Consensus</span>
-        <strong>#{player.consensusRank}</strong>
+        <strong>{player.consensusRank === null ? "Unranked" : `#${player.consensusRank}`}</strong>
       </div>
-      <span className={`rank-delta${difference > 0 ? " is-positive" : difference < 0 ? " is-negative" : ""}`}>
-        {difference === 0 ? "EVEN" : difference > 0 ? `MY +${difference}` : `MY ${difference}`}
+      <span className={`rank-delta${difference !== null && difference > 0 ? " is-positive" : difference !== null && difference < 0 ? " is-negative" : ""}`}>
+        {difference === null ? "NO MARKET" : difference === 0 ? "EVEN" : difference > 0 ? `MY +${difference}` : `MY ${difference}`}
       </span>
       <div className="ranking-row__actions" aria-label={`Move ${player.name}`}>
+        <button
+          type="button"
+          aria-label={`Move ${player.name} to an exact rank`}
+          onClick={() => onMoveToRank(player.id)}
+          title="Move to rank"
+        >
+          <Hash size={14} />
+        </button>
         <button
           type="button"
           aria-label={`Move ${player.name} up`}
@@ -731,8 +748,10 @@ function AgentSnapshotPanel({
 }
 
 export default function RankingsPage() {
-  const [rankings, setRankings] = useState<RankingPlayer[]>(() =>
-    typeof window === "undefined" ? starterRankings : loadPersonalRankings(window.localStorage));
+  const initialSavedRankings = useRef<RankingPlayer[] | null>(
+    typeof window === "undefined" ? null : loadSavedPersonalRankings(window.localStorage),
+  );
+  const [rankings, setRankings] = useState<RankingPlayer[]>(() => initialSavedRankings.current ?? starterRankings);
   const [query, setQuery] = useState("");
   const [position, setPosition] = useState<(typeof positions)[number]>("ALL");
   const [announcement, setAnnouncement] = useState("");
@@ -741,10 +760,18 @@ export default function RankingsPage() {
   const [snapshots, setSnapshots] = useState<AgentRankingSnapshot[]>([]);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [snapshotsLoading, setSnapshotsLoading] = useState(true);
+  const [playerCatalog, setPlayerCatalog] = useState<CanonicalFantasyPlayer[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(true);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [catalogReload, setCatalogReload] = useState(0);
+  const [catalogHydrated, setCatalogHydrated] = useState(false);
   const [researchJobs, setResearchJobs] = useState<ResearchJob[]>([]);
   const ownerToken = typeof window === "undefined" ? "" : window.localStorage.getItem(RESEARCH_OWNER_TOKEN_KEY)?.trim() ?? "";
   const [pendingCopy, setPendingCopy] = useState<{ snapshot: AgentRankingSnapshot; position: string } | null>(null);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportStatus, setExportStatus] = useState<{ message: string; error: boolean } | null>(null);
+  const [pendingRankMove, setPendingRankMove] = useState<{ playerId: string; rank: string } | null>(null);
   const [preferences, setPreferences] = useState<RankingsPreferences>(() =>
     typeof window === "undefined" ? loadRankingsPreferences({ getItem: () => null }) : loadRankingsPreferences(window.localStorage));
   const sensors = useSensors(
@@ -754,11 +781,14 @@ export default function RankingsPage() {
   );
   const confirmationRef = useRef<HTMLDivElement>(null);
   const copyTriggerRef = useRef<HTMLElement | null>(null);
+  const rankMoveTriggerRef = useRef<HTMLElement | null>(null);
+  const rankMoveInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    if (!catalogHydrated) return;
     savePersonalRankings(window.localStorage, rankings);
     setSavedAt(new Date());
-  }, [rankings]);
+  }, [catalogHydrated, rankings]);
 
   useEffect(() => {
     saveRankingsPreferences(window.localStorage, preferences);
@@ -767,6 +797,27 @@ export default function RankingsPage() {
   useEffect(() => {
     if (pendingCopy) confirmationRef.current?.focus();
   }, [pendingCopy]);
+
+  useEffect(() => {
+    if (pendingRankMove) rankMoveInputRef.current?.focus();
+  }, [pendingRankMove]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setCatalogLoading(true);
+    setCatalogError(null);
+    void fetchFantasyPlayerCatalog(controller.signal)
+      .then((players) => {
+        if (players.length === 0) throw new Error("Player catalog is empty. Sync the Sleeper player catalog and try again.");
+        setPlayerCatalog(players);
+      })
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setCatalogError(error instanceof Error ? error.message : "Unknown player catalog error");
+      })
+      .finally(() => { if (!controller.signal.aborted) setCatalogLoading(false); });
+    return () => controller.abort();
+  }, [catalogReload]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -794,6 +845,21 @@ export default function RankingsPage() {
     return byPlayer;
   }, [researchJobs]);
 
+  const currentAggregateEntries = useMemo(
+    () => aggregateRankingSnapshots(snapshots, preferences.excludedAggregateSourceKeys)?.entries ?? [],
+    [preferences.excludedAggregateSourceKeys, snapshots],
+  );
+
+  useEffect(() => {
+    if (catalogLoading || snapshotsLoading || catalogError || playerCatalog.length === 0) return;
+    setRankings((current) => hydratePersonalRankings(
+      catalogHydrated ? current : initialSavedRankings.current,
+      playerCatalog,
+      currentAggregateEntries,
+    ));
+    setCatalogHydrated(true);
+  }, [catalogError, catalogHydrated, catalogLoading, currentAggregateEntries, playerCatalog, snapshotsLoading]);
+
   async function loadAgentSnapshots(signal?: AbortSignal) {
     setSnapshotsLoading(true);
     setSnapshotError(null);
@@ -818,6 +884,14 @@ export default function RankingsPage() {
     () => derivePositionRanks(rankings, (player) => player.id, (player) => player.position),
     [rankings],
   );
+  const overallRankById = useMemo(
+    () => new Map(rankings.map((player, index) => [player.id, index + 1])),
+    [rankings],
+  );
+  const biggestReach = useMemo(() => Math.max(
+    0,
+    ...rankings.flatMap((player, index) => player.consensusRank === null ? [] : [player.consensusRank - index - 1]),
+  ), [rankings]);
 
   function announceMove(playerId: string, before: RankingPlayer[], after: RankingPlayer[]) {
     const player = before.find((item) => item.id === playerId);
@@ -838,6 +912,29 @@ export default function RankingsPage() {
     const next = moveRanking(rankings, playerId, direction);
     announceMove(playerId, rankings, next);
     setRankings(next);
+  }
+
+  function requestMoveToRank(playerId: string) {
+    const currentRank = rankings.findIndex((player) => player.id === playerId) + 1;
+    if (currentRank < 1) return;
+    rankMoveTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setPendingRankMove({ playerId, rank: String(currentRank) });
+  }
+
+  function cancelMoveToRank() {
+    setPendingRankMove(null);
+    queueMicrotask(() => rankMoveTriggerRef.current?.focus());
+  }
+
+  function confirmMoveToRank() {
+    if (!pendingRankMove) return;
+    const requestedRank = Number(pendingRankMove.rank);
+    if (!Number.isFinite(requestedRank)) return;
+    const next = moveRankingTo(rankings, pendingRankMove.playerId, requestedRank);
+    announceMove(pendingRankMove.playerId, rankings, next);
+    setRankings(next);
+    setPendingRankMove(null);
+    queueMicrotask(() => rankMoveTriggerRef.current?.focus());
   }
 
   function confirmAgentOrder() {
@@ -862,6 +959,28 @@ export default function RankingsPage() {
     savePersonalRankings(window.localStorage, rankings);
     setSavedAt(new Date());
     setAnnouncement("Saved your personal rankings on this device");
+  }
+
+  async function exportWorkbook() {
+    setExporting(true);
+    setExportStatus(null);
+    try {
+      const filename = await exportRankingsToExcel({
+        rankings,
+        snapshots,
+        leagueSize,
+        favoriteSourceKeys: preferences.favoriteSourceKeys,
+        excludedAggregateSourceKeys: preferences.excludedAggregateSourceKeys,
+      });
+      setExportStatus({ message: `Exported ${filename}`, error: false });
+    } catch (error: unknown) {
+      setExportStatus({
+        message: error instanceof Error ? `Export failed: ${error.message}` : "Export failed. Please try again.",
+        error: true,
+      });
+    } finally {
+      setExporting(false);
+    }
   }
 
   function updatePreferences(update: Partial<RankingsPreferences>) {
@@ -912,9 +1031,22 @@ export default function RankingsPage() {
               <button className={position === value ? "is-active" : ""} key={value} onClick={() => setPosition(value)} type="button">{value}</button>
             ))}
           </div>
-          <button className="reset-board" type="button" onClick={() => setRankings(starterRankings)}>
+          <button
+            className="reset-board"
+            disabled={!catalogHydrated}
+            type="button"
+            onClick={() => {
+              setRankings(resetPersonalRankings(playerCatalog, currentAggregateEntries));
+              setAnnouncement(`Reset your board to the current ${currentAggregateEntries.length > 0 ? "aggregate and player catalog" : "player catalog"} baseline`);
+            }}
+          >
             <RotateCcw size={14} /> Reset
           </button>
+        </div>
+        <div className={`catalog-status${catalogError ? " is-error" : ""}`} role="status">
+          {catalogLoading ? "Loading the complete NFL fantasy player catalog…" : catalogError ? (
+            <><span>{catalogError}</span><button type="button" onClick={() => setCatalogReload((value) => value + 1)}>Try again</button></>
+          ) : `Loaded ${playerCatalog.length} active NFL fantasy players into your board.`}
         </div>
         <div className="ranking-column-labels" aria-hidden="true">
           <span>OVR / POS · Player</span><span>Market</span><span>Difference</span><span>Move</span>
@@ -926,17 +1058,18 @@ export default function RankingsPage() {
                 <SortableRankingRow
                   key={player.id}
                   player={player}
-                  rank={rankings.findIndex((item) => item.id === player.id) + 1}
+                  rank={overallRankById.get(player.id)!}
                   positionRank={personalPositionRanks.get(player.id)!}
                   total={rankings.length}
                   onMove={handleMove}
+                  onMoveToRank={requestMoveToRank}
                 />
               ))}
             </ol>
           </SortableContext>
         </DndContext>
         {visibleRankings.length === 0 && <div className="board-empty"><SlidersHorizontal size={20} /><p>No players match these filters.</p></div>}
-        <footer className="board-methodology">Starter names are demonstration data, not current expert advice. Your ordering is private to this browser until account sync is added.</footer>
+        <footer className="board-methodology">Your board combines the canonical NFL fantasy-player catalog with current aggregate ranks when available. Players without aggregate coverage remain clearly marked as unranked. Your ordering is private to this browser until account sync is added.</footer>
       </section>
     </section>
   );
@@ -983,7 +1116,6 @@ export default function RankingsPage() {
     <div className="page rankings-page">
       <header className="page-header rankings-header">
         <div>
-          <p className="eyebrow">Two independent workspaces</p>
           <h1>Rankings Center</h1>
           <p className="page-header__copy">Build your private board and review agent-found rankings without mixing the two.</p>
         </div>
@@ -1003,14 +1135,18 @@ export default function RankingsPage() {
             </select>
           </label>
           <span className="badge badge--amber">{leagueSize}-team PPR Redraft</span>
+          <button className="button button--secondary export-rankings" disabled={exporting} type="button" onClick={() => { void exportWorkbook(); }}>
+            <FileSpreadsheet size={14} /> {exporting ? "Exporting…" : "Export Excel"}
+          </button>
           <button className="button button--secondary save-board" type="button" onClick={saveBoard}><Check size={14} /> Save my rankings</button>
           <span className="autosave-state">{savedAt ? `Saved ${savedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "Not saved"}</span>
+          {exportStatus && <span className={`rankings-export-status${exportStatus.error ? " is-error" : ""}`} role="status">{exportStatus.message}</span>}
         </div>
       </header>
 
       <section className="ranking-stats" aria-label="Ranking board summary">
         <div><span>Players ranked</span><strong>{rankings.length}</strong></div>
-        <div><span>Your biggest reach</span><strong>{Math.max(...rankings.map((player, index) => player.consensusRank - index - 1), 0)} spots</strong></div>
+        <div><span>Your biggest reach</span><strong>{biggestReach} spots</strong></div>
         <div><span>Agent snapshots</span><strong>{snapshots.length}</strong></div>
         <div><span>Board scope</span><strong>{leagueSize}-team · Overall · Draft</strong></div>
       </section>
@@ -1051,6 +1187,39 @@ export default function RankingsPage() {
           <div><button type="button" onClick={cancelAgentOrder}>Cancel</button><button className="button button--primary" type="button" onClick={confirmAgentOrder}>Copy rankings</button></div>
         </div>
       )}
+      {pendingRankMove && (() => {
+        const player = rankings.find((item) => item.id === pendingRankMove.playerId);
+        const currentRank = overallRankById.get(pendingRankMove.playerId) ?? 0;
+        if (!player) return null;
+        return (
+          <div className="rank-move-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) cancelMoveToRank(); }}>
+            <form
+              aria-labelledby="move-to-rank-title"
+              aria-modal="true"
+              className="rank-move-dialog"
+              onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); cancelMoveToRank(); } }}
+              onSubmit={(event) => { event.preventDefault(); confirmMoveToRank(); }}
+              role="dialog"
+            >
+              <div className="rank-move-dialog__heading"><Hash size={17} /><div><span>Quick move</span><strong id="move-to-rank-title">Move {player.name}</strong></div></div>
+              <p>Currently overall rank {currentRank}. Choose any rank from 1 to {rankings.length}.</p>
+              <label htmlFor="exact-rank-input">Move to rank</label>
+              <input
+                id="exact-rank-input"
+                inputMode="numeric"
+                max={rankings.length}
+                min={1}
+                onChange={(event) => setPendingRankMove({ ...pendingRankMove, rank: event.target.value })}
+                ref={rankMoveInputRef}
+                required
+                type="number"
+                value={pendingRankMove.rank}
+              />
+              <div className="rank-move-dialog__actions"><button type="button" onClick={cancelMoveToRank}>Cancel</button><button className="button button--primary" type="submit">Move player</button></div>
+            </form>
+          </div>
+        );
+      })()}
       <p className="sr-only" aria-live="polite">{announcement}</p>
     </div>
   );

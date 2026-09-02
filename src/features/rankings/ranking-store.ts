@@ -1,10 +1,13 @@
+import type { AggregatedRankingEntry } from "./ranking-aggregate";
+import type { CanonicalFantasyPlayer } from "./player-api";
+
 export type RankingPlayer = {
   id: string;
   name: string;
   position: string;
   team: string;
-  consensusRank: number;
-  trend: number;
+  consensusRank: number | null;
+  trend: number | null;
 };
 
 export const starterRankings: RankingPlayer[] = [
@@ -50,28 +53,42 @@ export function moveRanking(
   return reorderRankings(rankings, playerId, rankings[target].id);
 }
 
-export function loadPersonalRankings(storage: Pick<Storage, "getItem">): RankingPlayer[] {
+export function moveRankingTo(
+  rankings: RankingPlayer[],
+  playerId: string,
+  requestedRank: number,
+): RankingPlayer[] {
+  const from = rankings.findIndex((player) => player.id === playerId);
+  if (from < 0 || rankings.length === 0 || !Number.isFinite(requestedRank)) return rankings;
+  const targetRank = Math.min(rankings.length, Math.max(1, Math.trunc(requestedRank)));
+  const to = targetRank - 1;
+  if (from === to) return rankings;
+  const next = [...rankings];
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  return next;
+}
+
+export function loadSavedPersonalRankings(storage: Pick<Storage, "getItem">): RankingPlayer[] | null {
+  const raw = storage.getItem(PERSONAL_RANKINGS_STORAGE_KEY);
+  if (raw === null) return null;
   try {
-    const saved = JSON.parse(storage.getItem(PERSONAL_RANKINGS_STORAGE_KEY) ?? "[]") as unknown;
-    if (!Array.isArray(saved)) return starterRankings;
-    const known = new Map(starterRankings.map((player) => [player.id, player]));
+    const saved = JSON.parse(raw) as unknown;
+    if (!Array.isArray(saved)) return null;
+    const starterById = new Map(starterRankings.map((player) => [player.id, player]));
     const ordered = saved.flatMap((value): RankingPlayer[] => {
-      if (typeof value === "string") return known.has(value) ? [known.get(value)!] : [];
+      if (typeof value === "string") return starterById.has(value) ? [starterById.get(value)!] : [];
       if (!isRankingPlayer(value)) return [];
-      return [{
-        id: value.id,
-        name: value.name,
-        position: value.position,
-        team: value.team,
-        consensusRank: value.consensusRank,
-        trend: value.trend,
-      }];
-    }).filter((player, index, values) => values.findIndex((candidate) => candidate.id === player.id) === index);
-    const used = new Set(ordered.map((player) => player.id));
-    return [...ordered, ...starterRankings.filter((player) => !used.has(player.id))];
+      return [{ ...value }];
+    });
+    return uniquePlayers(ordered);
   } catch {
-    return starterRankings;
+    return null;
   }
+}
+
+export function loadPersonalRankings(storage: Pick<Storage, "getItem">): RankingPlayer[] {
+  return loadSavedPersonalRankings(storage) ?? starterRankings;
 }
 
 export function savePersonalRankings(
@@ -88,10 +105,100 @@ function isRankingPlayer(value: unknown): value is RankingPlayer {
     && typeof player.name === "string"
     && typeof player.position === "string"
     && typeof player.team === "string"
-    && typeof player.consensusRank === "number"
-    && Number.isFinite(player.consensusRank)
-    && typeof player.trend === "number"
-    && Number.isFinite(player.trend);
+    && (player.consensusRank === null || (typeof player.consensusRank === "number" && Number.isFinite(player.consensusRank)))
+    && (player.trend === null || (typeof player.trend === "number" && Number.isFinite(player.trend)));
+}
+
+function normalizedPlayerName(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("en-US")
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function uniquePlayers(players: RankingPlayer[]): RankingPlayer[] {
+  const usedIds = new Set<string>();
+  const usedNames = new Set<string>();
+  return players.filter((player) => {
+    const name = normalizedPlayerName(player.name);
+    if (usedIds.has(player.id) || usedNames.has(name)) return false;
+    usedIds.add(player.id);
+    usedNames.add(name);
+    return true;
+  });
+}
+
+function marketDetails(
+  player: Pick<CanonicalFantasyPlayer, "id" | "fullName">,
+  aggregateById: Map<string, AggregatedRankingEntry>,
+  aggregateByName: Map<string, AggregatedRankingEntry>,
+): Pick<RankingPlayer, "consensusRank" | "trend"> {
+  const market = aggregateById.get(player.id) ?? aggregateByName.get(normalizedPlayerName(player.fullName));
+  return {
+    consensusRank: market?.rank ?? null,
+    trend: market?.previousRank == null ? null : market.previousRank - market.rank,
+  };
+}
+
+export function hydratePersonalRankings(
+  savedRankings: RankingPlayer[] | null,
+  catalog: CanonicalFantasyPlayer[],
+  aggregateEntries: AggregatedRankingEntry[] = [],
+): RankingPlayer[] {
+  const canonical = catalog.filter((player) => player.id && player.fullName && player.position && player.nflTeam);
+  const canonicalById = new Map(canonical.map((player) => [player.id, player]));
+  const canonicalByName = new Map(canonical.map((player) => [normalizedPlayerName(player.fullName), player]));
+  const aggregateById = new Map(aggregateEntries.flatMap((entry) => entry.playerId ? [[entry.playerId, entry] as const] : []));
+  const aggregateByName = new Map(aggregateEntries.map((entry) => [normalizedPlayerName(entry.playerName), entry]));
+  const catalogRanking = (player: CanonicalFantasyPlayer): RankingPlayer => ({
+    id: player.id,
+    name: player.fullName,
+    position: player.isTeamDefense || player.position === "DEF" || player.position === "DST" ? "DST" : player.position!,
+    team: player.nflTeam!,
+    ...marketDetails(player, aggregateById, aggregateByName),
+  });
+
+  const ordered: RankingPlayer[] = [];
+  const usedCanonicalIds = new Set<string>();
+  const usedNames = new Set<string>();
+  const appendCanonical = (player: CanonicalFantasyPlayer) => {
+    const normalizedName = normalizedPlayerName(player.fullName);
+    if (usedCanonicalIds.has(player.id) || usedNames.has(normalizedName)) return;
+    ordered.push(catalogRanking(player));
+    usedCanonicalIds.add(player.id);
+    usedNames.add(normalizedName);
+  };
+
+  if (savedRankings) {
+    for (const saved of savedRankings) {
+      const match = canonicalById.get(saved.id) ?? canonicalByName.get(normalizedPlayerName(saved.name));
+      if (match) {
+        appendCanonical(match);
+        continue;
+      }
+      const normalizedName = normalizedPlayerName(saved.name);
+      if (usedNames.has(normalizedName)) continue;
+      ordered.push({ ...saved, consensusRank: null, trend: null });
+      usedNames.add(normalizedName);
+    }
+  }
+
+  // Market order is only a seed for a new board, or for players newly added to a saved board.
+  for (const entry of aggregateEntries) {
+    const match = (entry.playerId ? canonicalById.get(entry.playerId) : undefined)
+      ?? canonicalByName.get(normalizedPlayerName(entry.playerName));
+    if (match) appendCanonical(match);
+  }
+  for (const player of canonical) appendCanonical(player);
+  return ordered;
+}
+
+export function resetPersonalRankings(
+  catalog: CanonicalFantasyPlayer[],
+  aggregateEntries: AggregatedRankingEntry[] = [],
+): RankingPlayer[] {
+  return hydratePersonalRankings(null, catalog, aggregateEntries);
 }
 
 export function applyAgentOrder(
