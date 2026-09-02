@@ -29,6 +29,8 @@ import {
   type SleeperReport,
 } from "./sleepers-api";
 
+const MAX_REPORT_POLL_ATTEMPTS = 60;
+
 function loadOwnerToken(): string {
   return window.localStorage.getItem(RESEARCH_OWNER_TOKEN_KEY) ?? "";
 }
@@ -170,12 +172,12 @@ export default function SleepersPage({ localDevelopmentOverride }: { localDevelo
           setLoadError(null);
           setPollBaseline(null);
           setNotice("Sleeper board updated with the completed research report.");
-        } else if (attempts >= 24) {
+        } else if (attempts >= MAX_REPORT_POLL_ATTEMPTS) {
           setPollBaseline(null);
           setNotice("Research is still running. The current board remains available; refresh this page later for the new report.");
         }
       } catch (error) {
-        if (!(error instanceof DOMException && error.name === "AbortError") && attempts >= 24) {
+        if (!(error instanceof DOMException && error.name === "AbortError") && attempts >= MAX_REPORT_POLL_ATTEMPTS) {
           setPollBaseline(null);
           setNotice("Automatic report checking ended. Refresh the page later to check for completed research.");
         }
