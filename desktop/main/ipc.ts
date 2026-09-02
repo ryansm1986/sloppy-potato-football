@@ -9,6 +9,7 @@ import type {
 import { IPC_CHANNELS } from "../shared/contracts.js";
 import { sanitizeSettingsPatch, type SecureConfigStore } from "./config-store.js";
 import { enrollRunnerDevice } from "./runner-enrollment.js";
+import { normalizeResearchOwnerTokenInput } from "./owner-token.js";
 import type { RunnerController } from "./runner-controller.js";
 import type { DesktopUpdaterController } from "./desktop-updater.js";
 import { isTrustedRendererUrl } from "./security.js";
@@ -148,11 +149,8 @@ export function registerDesktopIpc(options: DesktopIpcOptions): () => void {
       throw new Error("Runner enrollment requires an owner token and computer name.");
     }
     const input = args[0] as Record<string, unknown>;
-    const ownerToken = typeof input.ownerToken === "string" ? input.ownerToken.trim() : "";
+    const ownerToken = normalizeResearchOwnerTokenInput(input.ownerToken);
     const name = typeof input.name === "string" ? input.name.trim() : "";
-    if (ownerToken.length < 32 || ownerToken.length > 4_096) {
-      throw new Error("Enter a valid owner token.");
-    }
     if (!name || name.length > 100) throw new Error("Computer name must be between 1 and 100 characters.");
 
     // Finish any claimed job with its current credential before asking the API

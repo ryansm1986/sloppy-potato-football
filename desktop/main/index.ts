@@ -7,7 +7,7 @@ import {
   type Event,
   type WebContents,
 } from "electron";
-import { autoUpdater } from "electron-updater";
+import electronUpdater from "electron-updater";
 import type { DesktopSettings } from "../shared/contracts.js";
 import { installDesktopProtocol, registerDesktopScheme } from "./app-protocol.js";
 import { SecureConfigStore } from "./config-store.js";
@@ -19,6 +19,11 @@ import { RunnerNotifier } from "./notifier.js";
 import type { RunnerController } from "./runner-controller.js";
 import { isSafeExternalUrl, isTrustedRendererUrl } from "./security.js";
 import { DesktopTray } from "./tray.js";
+
+// electron-updater is published as CommonJS. A named ESM import works while
+// bundling/tests transpile it, but fails when Electron loads the externalized
+// dependency from the packaged ESM entry point.
+const { autoUpdater } = electronUpdater;
 
 registerDesktopScheme();
 

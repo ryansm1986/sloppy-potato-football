@@ -785,6 +785,11 @@ tbody tr:hover { background: rgba(255, 255, 255, .015); }
 .desktop-token-setup code { color: var(--amber); font-size: inherit; }
 .desktop-token-setup label, .desktop-credential-management label, .desktop-manual-token label { display: grid; gap: 5px; color: var(--subtle); font-size: 7px; font-weight: 800; }
 .desktop-token-setup input, .desktop-credential-management input, .desktop-manual-token input { width: 100%; min-height: 36px; padding: 0 9px; color: var(--text); border: 1px solid var(--border); border-radius: 5px; background: #0d0e10; font-size: 8px; }
+.desktop-token-setup .button:disabled { color: #777064; border-color: var(--border); background: #242321; cursor: not-allowed; opacity: .62; }
+.desktop-token-feedback { display: flex; align-items: center; gap: 6px; margin: -2px 0 0; color: var(--subtle); font-size: 7px; line-height: 1.45; }
+.desktop-token-feedback.is-ready { color: var(--green); }
+.desktop-token-feedback.is-pending { color: var(--amber); }
+.desktop-token-error { margin: 0; }
 .desktop-manual-token { padding-top: 3px; border-top: 1px solid var(--border-soft); }
 .desktop-manual-token summary, .desktop-credential-management summary { padding: 8px 0; color: var(--subtle); font-size: 7px; font-weight: 800; cursor: pointer; }
 .desktop-manual-token[open] { display: grid; gap: 8px; }

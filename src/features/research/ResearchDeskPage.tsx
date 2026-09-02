@@ -575,7 +575,7 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
         </div>
 
         <aside className="research-side">
-          <DesktopRunnerControls />
+          <DesktopRunnerControls ownerToken={ownerToken} />
           <section className="panel runner-devices" aria-label="Connected runner devices">
             <header>
               <div><p className="eyebrow">Device security</p><h2>Connected Runners</h2></div>

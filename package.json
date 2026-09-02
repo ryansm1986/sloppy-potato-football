@@ -1,7 +1,7 @@
 {
   "name": "sloppy-potato-fantasy-football",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Fantasy football research, rankings, and local agent runner.",
   "author": "Ryan Smith",
   "type": "module",
@@ -25,7 +25,7 @@
     "runner:once": "tsx runner/cli.ts once",
     "runner": "tsx runner/cli.ts run",
     "bridge:setup": "tsx runner/setup.ts",
-    "desktop:build:shell": "tsup desktop/main/entry.ts --format esm --platform node --external electron --external electron-updater --out-dir dist-desktop/main && tsup desktop/preload.ts --format cjs --platform node --external electron --out-dir dist-desktop && node desktop/scripts/copy-assets.mjs",
+    "desktop:build:shell": "tsup desktop/main/entry.ts --format esm --platform node --external electron --external electron-updater --out-dir dist-desktop/main && tsup desktop/preload.ts --format cjs --platform node --external electron --out-dir dist-desktop && node desktop/scripts/copy-assets.mjs && node desktop/scripts/verify-main-bundle.mjs",
     "desktop:build": "pnpm build && pnpm desktop:build:shell",
     "desktop:dev": "pnpm desktop:build:shell && concurrently -k \"vite\" \"wait-on http-get://127.0.0.1:5173 && cross-env SLOPPY_POTATO_DESKTOP_DEV_URL=http://127.0.0.1:5173 electron .\"",
     "desktop:test": "vitest run --config desktop/vitest.config.ts",

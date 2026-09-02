@@ -60,6 +60,61 @@ describe("DesktopRunnerControls", () => {
     expect(screen.queryByLabelText("Desktop runner token")).not.toBeInTheDocument();
   });
 
+  it("explains why setup is disabled when owner access is missing", async () => {
+    const api = desktopApi(false);
+    window.sloppyPotatoDesktop = api;
+    render(<DesktopRunnerControls />);
+
+    expect(await screen.findByText(/enter an owner token here or save one/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /set up this computer/i })).toBeDisabled();
+  });
+
+  it("uses saved owner access without displaying the token", async () => {
+    const api = desktopApi(false);
+    window.sloppyPotatoDesktop = api;
+    const savedOwnerToken = "s".repeat(48);
+    render(<DesktopRunnerControls ownerToken={savedOwnerToken} />);
+
+    expect(await screen.findByText(/saved Research Desk owner access is ready/i)).toBeInTheDocument();
+    expect(screen.getByLabelText("Owner token")).toHaveValue("");
+    const setup = screen.getByRole("button", { name: /set up this computer/i });
+    expect(setup).toBeEnabled();
+    fireEvent.click(setup);
+
+    await waitFor(() => expect(api.credentials.enrollRunner).toHaveBeenCalledWith({
+      ownerToken: savedOwnerToken,
+      name: "My fantasy football computer",
+    }));
+  });
+
+  it("shows immediate progress while enrollment is pending", async () => {
+    const api = desktopApi(false);
+    api.credentials.enrollRunner = vi.fn(() => new Promise<never>(() => undefined));
+    window.sloppyPotatoDesktop = api;
+    render(<DesktopRunnerControls ownerToken={"s".repeat(48)} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /set up this computer/i }));
+
+    expect(await screen.findByRole("button", { name: /setting up/i })).toBeDisabled();
+    expect(screen.getByText(/creating and securing this computer's runner credential/i)).toBeInTheDocument();
+  });
+
+  it("places a rejected enrollment error directly after the setup button", async () => {
+    const api = desktopApi(false);
+    api.credentials.enrollRunner = vi.fn(async () => {
+      throw new Error("A valid research owner token is required.");
+    });
+    window.sloppyPotatoDesktop = api;
+    render(<DesktopRunnerControls ownerToken={"x".repeat(48)} />);
+
+    const setup = await screen.findByRole("button", { name: /set up this computer/i });
+    fireEvent.click(setup);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/valid research owner token is required/i);
+    expect(setup.nextElementSibling).toBe(alert);
+  });
+
   it("enrolls a computer without receiving or displaying its device token", async () => {
     const api = desktopApi(false);
     window.sloppyPotatoDesktop = api;

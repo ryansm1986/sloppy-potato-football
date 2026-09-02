@@ -1,8 +1,10 @@
-import { AlertTriangle, Download, LoaderCircle, RotateCcw } from "lucide-react";
+import { AlertTriangle, Download, LoaderCircle, RefreshCw, RotateCcw } from "lucide-react";
 import { useEffect, useState, type CSSProperties } from "react";
 import type { DesktopUpdateStatus } from "../../../desktop/shared/contracts";
 
 const actionablePhases = new Set<DesktopUpdateStatus["phase"]>([
+  "idle",
+  "checking",
   "available",
   "downloading",
   "ready",
@@ -12,6 +14,10 @@ const actionablePhases = new Set<DesktopUpdateStatus["phase"]>([
 function updateLabel(status: DesktopUpdateStatus, invoking: boolean) {
   const version = status.availableVersion ? ` v${status.availableVersion.replace(/^v/i, "")}` : "";
 
+  if (status.phase === "idle") {
+    return invoking ? "Checking for updates…" : "Check for updates";
+  }
+  if (status.phase === "checking") return "Checking for updates…";
   if (status.phase === "available") {
     return invoking ? "Starting download..." : `Update${version} available`;
   }
@@ -26,6 +32,8 @@ function updateLabel(status: DesktopUpdateStatus, invoking: boolean) {
 }
 
 function updateDescription(status: DesktopUpdateStatus) {
+  if (status.phase === "idle") return "Look for a newer desktop version";
+  if (status.phase === "checking") return "Looking for a newer desktop version";
   if (status.phase === "available") return "Download the update";
   if (status.phase === "downloading") return "The update is downloading";
   if (status.phase === "ready") return "Restart Sloppy Potato to finish installing the update";
@@ -33,7 +41,8 @@ function updateDescription(status: DesktopUpdateStatus) {
 }
 
 function UpdateIcon({ status }: { status: DesktopUpdateStatus }) {
-  if (status.phase === "downloading") return <LoaderCircle aria-hidden="true" className="spin" size={17} />;
+  if (status.phase === "checking" || status.phase === "downloading") return <LoaderCircle aria-hidden="true" className="spin" size={17} />;
+  if (status.phase === "idle") return <RefreshCw aria-hidden="true" size={17} />;
   if (status.phase === "ready") return <RotateCcw aria-hidden="true" size={17} />;
   if (status.phase === "error") return <AlertTriangle aria-hidden="true" size={17} />;
   return <Download aria-hidden="true" size={17} />;
@@ -79,7 +88,7 @@ export default function DesktopUpdateControl() {
 
   const label = updateLabel(status, invoking);
   const description = updateDescription(status);
-  const disabled = invoking || status.phase === "downloading";
+  const disabled = invoking || status.phase === "checking" || status.phase === "downloading";
 
   async function handleClick() {
     const updater = updates;

@@ -35,14 +35,44 @@ function installDesktopBridge(initialStatus: DesktopUpdateStatus) {
 }
 
 describe("DesktopUpdateControl", () => {
-  it("does not render on the website or while no update is actionable", async () => {
+  it("does not render on the website or in an unsupported desktop build", async () => {
     const { rerender } = render(<DesktopUpdateControl />);
     expect(screen.queryByRole("button", { name: /update/i })).not.toBeInTheDocument();
 
-    installDesktopBridge({ phase: "idle", currentVersion: "0.1.0" });
+    installDesktopBridge({ phase: "unsupported", currentVersion: "0.1.0" });
     rerender(<DesktopUpdateControl />);
 
     await waitFor(() => expect(screen.queryByRole("button", { name: /update/i })).not.toBeInTheDocument());
+  });
+
+  it("always offers a manual update check in an installed desktop build", async () => {
+    const bridge = installDesktopBridge({ phase: "idle", currentVersion: "0.1.0" });
+    render(<DesktopUpdateControl />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /check for updates.*look for a newer desktop version/i }));
+
+    await waitFor(() => expect(bridge.updates.check).toHaveBeenCalledOnce());
+  });
+
+  it("shows a disabled checking state", async () => {
+    installDesktopBridge({ phase: "checking", currentVersion: "0.1.0" });
+    render(<DesktopUpdateControl />);
+
+    const checking = await screen.findByRole("button", { name: /checking for updates/i });
+    expect(checking).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Checking for updates…");
+  });
+
+  it("returns to the manual check action when no update is found", async () => {
+    const bridge = installDesktopBridge({ phase: "idle", currentVersion: "0.1.0" });
+    bridge.updates.check = vi.fn(async (): Promise<DesktopUpdateStatus> => ({ phase: "idle", currentVersion: "0.1.0" }));
+    window.sloppyPotatoDesktop = { updates: bridge.updates } as unknown as SloppyPotatoDesktopApi;
+    render(<DesktopUpdateControl />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /check for updates/i }));
+
+    await waitFor(() => expect(bridge.updates.check).toHaveBeenCalledOnce());
+    expect(await screen.findByRole("button", { name: /check for updates.*look for a newer desktop version/i })).toBeEnabled();
   });
 
   it("downloads on the first click, then restarts to install on the second click", async () => {
