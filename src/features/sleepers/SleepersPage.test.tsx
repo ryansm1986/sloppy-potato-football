@@ -13,6 +13,8 @@ const report: SleeperReport = {
   leagueSize: 12,
   summary: "Wide receiver values are strongest in the middle rounds.",
   generatedAt: new Date().toISOString(),
+  discoverNewSources: true,
+  newPublisherCount: 1,
   positionSummaries: {
     QB: "Wait on quarterback and target rushing upside.",
     RB: "The best backs have clear contingent value.",
@@ -50,7 +52,7 @@ const report: SleeperReport = {
         upside: "A top-eight finish if rushing volume holds.",
         risk: "Passing efficiency remains volatile.",
         sources: [
-          { publisher: "Fantasy Desk", title: "2026 QB sleepers", url: "https://example.com/one", publishedAt: "2026-08-20T00:00:00.000Z", recommendation: "Target after the first quarterback run." },
+          { publisher: "Fantasy Desk", title: "2026 QB sleepers", url: "https://example.com/one", publishedAt: "2026-08-20T00:00:00.000Z", recommendation: "Target after the first quarterback run.", isNewDiscovery: true },
           { publisher: "Gridiron Lab", title: "Late-round quarterbacks", url: "https://example.org/two", publishedAt: null, recommendation: null },
           { publisher: "Draft Review", title: "Rushing upside", url: "https://example.net/three", publishedAt: null, recommendation: null },
         ],
@@ -105,6 +107,7 @@ describe("SleepersPage", () => {
     expect(screen.getByText("3", { selector: ".sleeper-consensus strong" })).toBeInTheDocument();
     expect(screen.getByText("Round 9")).toBeInTheDocument();
     expect(screen.getByText("Picks 97\u2013108")).toBeInTheDocument();
+    expect(screen.getByText("1 new publisher found")).toBeInTheDocument();
     const quarterbackPanel = screen.getByRole("tabpanel", { name: /QB 2 sleepers/i });
     expect(within(quarterbackPanel).getByText("Wait on quarterback and target rushing upside.")).toBeInTheDocument();
     expect(within(quarterbackPanel).getByRole("heading", { name: "Consensus QB" })).toBeInTheDocument();
@@ -145,6 +148,7 @@ describe("SleepersPage", () => {
     const source = screen.getByRole("link", { name: /Fantasy Desk/i });
     expect(source).toHaveAttribute("href", "https://example.com/one");
     expect(source).toHaveAttribute("target", "_blank");
+    expect(within(source).getByText("New source")).toBeInTheDocument();
     expect(screen.getByText(/A top-eight finish/i)).toBeInTheDocument();
   });
 
@@ -157,6 +161,13 @@ describe("SleepersPage", () => {
     expect(screen.getByRole("link", { name: /Add owner access/i })).toHaveAttribute("href", "/research");
   });
 
+  it("shows a clear result when source scouting finds no new publishers", async () => {
+    vi.stubGlobal("fetch", mockReport({ ...report, newPublisherCount: 0 }));
+    render(<MemoryRouter><SleepersPage localDevelopmentOverride={false} /></MemoryRouter>);
+
+    expect(await screen.findByText("No new publishers found")).toBeInTheDocument();
+  });
+
   it("queues a bounded sleeper assignment with owner authorization", async () => {
     window.localStorage.setItem(RESEARCH_OWNER_TOKEN_KEY, "owner-secret");
     const fetchMock = mockReport();
@@ -164,6 +175,7 @@ describe("SleepersPage", () => {
     render(<MemoryRouter><SleepersPage localDevelopmentOverride={false} /></MemoryRouter>);
 
     await screen.findByRole("heading", { name: "Consensus QB" });
+    expect(screen.getByRole("checkbox", { name: /Scout new publishers/i })).toBeChecked();
     fireEvent.change(screen.getByLabelText("League size"), { target: { value: "14" } });
     fireEvent.change(screen.getByLabelText("Sleepers per position"), { target: { value: "10" } });
     fireEvent.click(screen.getByRole("button", { name: /Research sleepers/i }));
@@ -177,8 +189,26 @@ describe("SleepersPage", () => {
       rankingType: "redraft",
       leagueSize: 14,
       sleepersPerPosition: 10,
+      discoverNewSources: true,
     });
     await waitFor(() => expect(screen.getByRole("button", { name: /Research sleepers/i })).toBeEnabled());
+  });
+
+  it("allows the owner to skip source scouting for a faster known-source refresh", async () => {
+    window.localStorage.setItem(RESEARCH_OWNER_TOKEN_KEY, "owner-secret");
+    const fetchMock = mockReport();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<MemoryRouter><SleepersPage localDevelopmentOverride={false} /></MemoryRouter>);
+
+    await screen.findByRole("heading", { name: "Consensus QB" });
+    const scoutToggle = screen.getByRole("checkbox", { name: /Scout new publishers/i });
+    fireEvent.click(scoutToggle);
+    expect(scoutToggle).not.toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: /Research sleepers/i }));
+
+    await screen.findByText(/Sleeper research queued/i);
+    const call = fetchMock.mock.calls.find(([url, init]) => url === "/api/research/jobs" && init?.method === "POST");
+    expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({ discoverNewSources: false });
   });
 
   it("polls after dispatch and publishes a newer completed report", async () => {

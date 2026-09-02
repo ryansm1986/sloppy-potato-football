@@ -7,6 +7,7 @@ import {
   persistSleeperReport,
   publishSleeperReport,
   sleeperReportInput,
+  snapshotKnownSleeperSourceDomains,
 } from "./sleeper-reports";
 
 type Database = DrizzleD1Database<typeof schema> & { $client: D1Database };
@@ -30,6 +31,7 @@ export const createResearchJobInput = z.object({
   rankingLimit: z.number().int().min(1).max(500).optional(),
   leagueSize: z.number().int().min(4).max(20).optional(),
   sleepersPerPosition: z.number().int().min(1).max(20).optional(),
+  discoverNewSources: z.boolean().optional().default(false),
 }).superRefine((value, context) => {
   if (value.type === "player_research" && !value.subject) {
     context.addIssue({ code: "custom", path: ["subject"], message: "Player research requires a subject" });
@@ -51,7 +53,14 @@ export const createResearchJobInput = z.object({
     : undefined,
   leagueSize: value.type === "sleepers_research" ? value.leagueSize ?? 12 : undefined,
   sleepersPerPosition: value.type === "sleepers_research" ? value.sleepersPerPosition ?? 8 : undefined,
+  discoverNewSources: value.type === "sleepers_research" ? value.discoverNewSources : undefined,
 }));
+
+type ResearchTaskInput = z.infer<typeof createResearchJobInput> & {
+  // Populated only by the Worker from published report history. It is not part
+  // of the owner-facing request schema and therefore cannot be client-supplied.
+  knownSourceDomains?: string[];
+};
 
 export const runnerHeartbeatInput = z.object({
   runnerId: z.string().trim().min(3).max(100).regex(/^[A-Za-z0-9._:-]+$/),
@@ -180,7 +189,7 @@ function iso(value: number | null) {
 }
 
 function toPublicJob(row: ResearchJobRow) {
-  const input = parseJson<z.infer<typeof createResearchJobInput>>(row.task_input_json, {} as never);
+  const input = parseJson<ResearchTaskInput>(row.task_input_json, {} as never);
   return {
     id: row.id,
     type: row.job_type,
@@ -195,6 +204,7 @@ function toPublicJob(row: ResearchJobRow) {
     rankingLimit: input.rankingLimit ?? null,
     leagueSize: input.leagueSize ?? null,
     sleepersPerPosition: input.sleepersPerPosition ?? null,
+    discoverNewSources: input.discoverNewSources ?? false,
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
     startedAt: iso(row.started_at),
@@ -209,7 +219,7 @@ function toPublicJob(row: ResearchJobRow) {
 }
 
 function executionContext(row: ResearchJobRow) {
-  const input = parseJson<z.infer<typeof createResearchJobInput>>(row.task_input_json, {} as never);
+  const input = parseJson<ResearchTaskInput>(row.task_input_json, {} as never);
   const scope = `${input.scoringFormat ?? "ppr"} ${input.rankingType ?? "redraft"}, ${input.position ?? "ALL"}, season ${input.season ?? new Date().getUTCFullYear()}`;
   const rankingLimit = input.rankingLimit ?? 100;
   switch (row.job_type) {
@@ -220,7 +230,7 @@ function executionContext(row: ResearchJobRow) {
     case "rankings_research":
       return `Research current fantasy-football ranking boards for ${scope}${input.subject ? `, focused on ${input.subject}` : ""}. Find at least three distinct reputable publishers and preserve each publisher as a separately attributed source board so the app can aggregate them. For EACH source return up to the requested Top ${rankingLimit}: exactly ${rankingLimit} contiguous entries when that publisher exposes them, or every verifiable entry available up to ${rankingLimit}. For ALL, use cross-position overall boards rather than quarterback-only or separate positional lists. Cite direct ranking URLs; never synthesize an agent-authored source.`;
     case "sleepers_research":
-      return `Research current-season PPR redraft sleepers for a ${input.leagueSize ?? 12}-team league. Return up to ${input.sleepersPerPosition ?? 8} evidence-backed candidates for each of QB, RB, WR, and TE. Preserve each independent publisher's direct article URL and recommendation for each player. Recommend an overall-pick range for every candidate; the server derives rounds and ranks candidates by their count of unique recommending source domains.`;
+      return `Research current-season PPR redraft sleepers for a ${input.leagueSize ?? 12}-team league. Return up to ${input.sleepersPerPosition ?? 8} evidence-backed candidates for each of QB, RB, WR, and TE. Preserve each independent publisher's direct article URL and recommendation for each player. Recommend an overall-pick range for every candidate; the server derives rounds and ranks candidates by their count of unique recommending source domains.${input.discoverNewSources ? ` Source discovery is enabled. Previously used canonical publisher domains: ${(input.knownSourceDomains ?? []).join(", ") || "none"}. Try to include at least two credible current-season publisher domains outside that snapshot; if they cannot be verified, fall back to the strongest established sources.` : ""}`;
   }
 }
 
@@ -264,13 +274,16 @@ export async function createResearchJob(
 
   const id = crypto.randomUUID();
   const now = Date.now();
+  const taskInput: ResearchTaskInput = input.type === "sleepers_research" && input.discoverNewSources
+    ? { ...input, knownSourceDomains: await snapshotKnownSleeperSourceDomains(db) }
+    : input;
   await db.$client.batch([
     db.$client.prepare(
       `INSERT INTO research_jobs
        (id, owner_identity, job_type, status, priority, task_input_json, idempotency_key,
         attempt_count, max_attempts, created_at, updated_at)
        VALUES (?, ?, ?, 'queued', 0, ?, ?, 0, 3, ?, ?)`,
-    ).bind(id, ownerIdentity, input.type, JSON.stringify(input), idempotencyKey, now, now),
+    ).bind(id, ownerIdentity, input.type, JSON.stringify(taskInput), idempotencyKey, now, now),
     db.$client.prepare(
       "INSERT INTO research_job_events (id, job_id, event_type, actor_type, actor_id, details_json, created_at) VALUES (?, ?, 'queued', 'owner', ?, '{}', ?)",
     ).bind(crypto.randomUUID(), id, ownerIdentity, now),
@@ -504,7 +517,7 @@ export async function completeResearchJob(db: Database, jobId: string, input: z.
   const now = Date.now();
   assertActiveLease(row, input.runnerId, input.leaseToken, now);
 
-  const taskInput = parseJson<z.infer<typeof createResearchJobInput>>(row.task_input_json, {} as never);
+  const taskInput = parseJson<ResearchTaskInput>(row.task_input_json, {} as never);
   const runner = await db.$client.prepare("SELECT provider FROM research_runners WHERE id = ?")
     .bind(input.runnerId).first<{ provider: string }>();
   const provider = runner?.provider === "claude" ? "claude" : "codex";
@@ -623,6 +636,8 @@ export async function completeResearchJob(db: Database, jobId: string, input: z.
       rankingType: "redraft",
       leagueSize: taskInput.leagueSize ?? 12,
       sleepersPerPosition: taskInput.sleepersPerPosition ?? 8,
+      discoverNewSources: taskInput.discoverNewSources ?? false,
+      knownSourceDomains: taskInput.knownSourceDomains ?? [],
       generatedAt,
       report: parsedSleeperReport,
     });

@@ -93,6 +93,149 @@ describe("sleeper research reports", () => {
     expect(canonicalSourceDomain("https://sports.bbc.co.uk/football/")).toBe("bbc.co.uk");
   });
 
+  it("snapshots known domains server-side and marks newly discovered publishers", async () => {
+    const suffix = crypto.randomUUID();
+    const runnerId = `sleeper-discovery-${suffix}`;
+    const seedJobId = crypto.randomUUID();
+    const seedReportId = crypto.randomUUID();
+    const seedCandidateId = crypto.randomUUID();
+    const now = Date.now();
+    const domainSuffix = suffix.replace(/-/g, "");
+    const overflowKnownDomain = `zzzzknown${domainSuffix}.com`;
+    const olderKnownSourceStatements = [
+      ...Array.from({ length: 45 }, (_, index) => `z${String(index).padStart(2, "0")}${domainSuffix}.com`),
+      overflowKnownDomain,
+    ].map((domain) => env.DB.prepare(
+      `INSERT INTO sleeper_candidate_sources
+       (id, candidate_id, publisher, title, url, source_domain, published_at, recommendation, created_at)
+       VALUES (?, ?, ?, 'Archived sleeper research', ?, ?, NULL, 'Archived recommendation.', ?)`,
+    ).bind(crypto.randomUUID(), seedCandidateId, `Archived ${domain}`, `https://${domain}/sleepers`, domain, now));
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO research_jobs
+         (id, owner_identity, job_type, status, priority, task_input_json, idempotency_key,
+          attempt_count, max_attempts, created_at, updated_at)
+         VALUES (?, 'primary-owner', 'sleepers_research', 'completed', 0, '{}', ?, 1, 3, ?, ?)`,
+      ).bind(seedJobId, `discovery-seed-${suffix}`, now, now),
+      env.DB.prepare(
+        `INSERT INTO sleeper_reports
+         (id, job_id, season, scoring_format, ranking_type, league_size, summary,
+          generated_at, created_at, published_at)
+         VALUES (?, ?, '2026', 'ppr', 'redraft', 12, 'Known source seed.', ?, ?, ?)`,
+      ).bind(seedReportId, seedJobId, now, now, now),
+      env.DB.prepare(
+        `INSERT INTO sleeper_candidates
+         (id, report_id, position, position_rank, player_name, team, source_count,
+          recommended_pick_start, recommended_pick_end, summary, upside, risk, created_at)
+         VALUES (?, ?, 'QB', 1, 'Known Player', 'BUF', 1, 100, 110, 'Known.', NULL, NULL, ?)`,
+      ).bind(seedCandidateId, seedReportId, now),
+      env.DB.prepare(
+        `INSERT INTO sleeper_candidate_sources
+         (id, candidate_id, publisher, title, url, source_domain, published_at, recommendation, created_at)
+         VALUES (?, ?, 'FantasyPros', 'Known sleepers', 'https://www.fantasypros.com/nfl/sleepers/',
+                 'fantasypros.com', NULL, 'Known recommendation.', ?)`,
+      ).bind(crypto.randomUUID(), seedCandidateId, now),
+      ...olderKnownSourceStatements,
+    ]);
+    await app.request(
+      "https://potato.example/api/runners/heartbeat",
+      request("POST", {
+        runnerId,
+        name: "Sleeper discovery runner",
+        provider: "codex",
+        status: "idle",
+        capabilities: ["sleepers_research"],
+      }, "runner-secret"),
+      bindings,
+    );
+
+    const create = await app.request(
+      "https://potato.example/api/research/jobs",
+      request("POST", {
+        type: "sleepers_research",
+        scoringFormat: "ppr",
+        rankingType: "redraft",
+        season: "2026",
+        leagueSize: 12,
+        sleepersPerPosition: 2,
+        discoverNewSources: true,
+        // This field is deliberately not accepted from the owner request.
+        knownSourceDomains: ["spoofed.example"],
+      }, "owner-secret", { "Idempotency-Key": `sleeper-discovery-${suffix}` }),
+      bindings,
+    );
+    expect(create.status).toBe(201);
+    const created = await create.json<{ job: Record<string, unknown> & { id: string; discoverNewSources: boolean } }>();
+    expect(created.job.discoverNewSources).toBe(true);
+    expect(created.job).not.toHaveProperty("knownSourceDomains");
+
+    const claim = await app.request(
+      "https://potato.example/api/runners/jobs/claim",
+      request("POST", { runnerId }, "runner-secret"),
+      bindings,
+    );
+    const claimed = (await claim.json<{ job: {
+      leaseToken: string;
+      executionContext: string;
+      input: { discoverNewSources: boolean; knownSourceDomains: string[] };
+    } }>()).job;
+    expect(claimed.input.discoverNewSources).toBe(true);
+    expect(claimed.input.knownSourceDomains).toContain("fantasypros.com");
+    expect(claimed.input.knownSourceDomains).not.toContain(overflowKnownDomain);
+    expect(claimed.input.knownSourceDomains).not.toContain("spoofed.example");
+    expect(claimed.input.knownSourceDomains.length).toBeLessThanOrEqual(40);
+    expect(claimed.executionContext).toContain("Source discovery is enabled");
+    expect(claimed.executionContext).toContain("at least two credible current-season publisher domains");
+
+    const freshOne = `freshone${suffix.replace(/-/g, "")}.com`;
+    const freshTwo = `freshtwo${suffix.replace(/-/g, "")}.com`;
+    const report = sleeperReportFixture();
+    report.candidates = report.candidates.map((candidate) => ({
+      ...candidate,
+      sources: candidate.sources.map((item) => item.url.includes("cbssports.com") ? {
+        ...item,
+        publisher: "Fresh Source One",
+        title: "Fresh sleeper analysis one",
+        url: `https://${freshOne}/football/sleepers`,
+      } : item.url.includes("espn.com") ? {
+        ...item,
+        publisher: "Fresh Source Two",
+        title: "Fresh sleeper analysis two",
+        url: `https://${freshTwo}/football/sleepers`,
+      } : item.url.includes("rankings.fantasypros.com") ? {
+        ...item,
+        publisher: "Archived Source",
+        title: "Archived sleeper analysis",
+        url: `https://${overflowKnownDomain}/football/sleepers`,
+      } : item),
+    }));
+    const completion = await app.request(
+      `https://potato.example/api/runners/jobs/${created.job.id}/result`,
+      request("POST", {
+        runnerId,
+        leaseToken: claimed.leaseToken,
+        resultId: `sleeper-discovery-result-${suffix}`,
+        result: completionResult(report),
+      }, "runner-secret"),
+      bindings,
+    );
+    expect(completion.status).toBe(200);
+
+    const latest = await app.request("https://potato.example/api/sleepers/latest", request("GET"), { DB: env.DB });
+    const body = await latest.json<{ report: {
+      discoverNewSources: boolean;
+      newPublisherCount: number;
+      positions: Record<string, Array<{ sources: Array<{ url: string; isNewDiscovery: boolean }> }>>;
+    } }>();
+    expect(body.report.discoverNewSources).toBe(true);
+    expect(body.report.newPublisherCount).toBe(2);
+    const sources = Object.values(body.report.positions).flatMap((candidates) => candidates.flatMap((candidate) => candidate.sources));
+    expect(sources.find((item) => item.url.includes("fantasypros.com"))?.isNewDiscovery).toBe(false);
+    expect(sources.find((item) => item.url.includes(overflowKnownDomain))?.isNewDiscovery).toBe(false);
+    expect(sources.find((item) => item.url.includes(freshOne))?.isNewDiscovery).toBe(true);
+    expect(sources.find((item) => item.url.includes(freshTwo))?.isNewDiscovery).toBe(true);
+  });
+
   it("publishes a normalized report, deduplicates domains, ranks by source count, and derives rounds", async () => {
     const suffix = crypto.randomUUID();
     const runnerId = `sleepers-${suffix}`;

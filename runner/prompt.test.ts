@@ -81,4 +81,28 @@ describe("buildResearchPrompt", () => {
     expect(prompt).toContain("OVERALL draft pick");
     expect(prompt).toContain("server derives them");
   });
+
+  it("directs an enabled sleeper run to scout outside the server domain snapshot", () => {
+    const prompt = buildResearchPrompt({
+      ...job,
+      type: "sleepers_research",
+      input: {
+        type: "sleepers_research",
+        scoringFormat: "ppr",
+        rankingType: "redraft",
+        position: "ALL",
+        season: "2026",
+        leagueSize: 12,
+        sleepersPerPosition: 8,
+        discoverNewSources: true,
+        knownSourceDomains: ["fantasypros.com", "espn.com"],
+      },
+      executionContext: "Scout for sleeper recommendations beyond the known publisher set.",
+    });
+
+    expect(prompt).toContain("Sleeper source discovery: enabled");
+    expect(prompt).toContain("fantasypros.com, espn.com");
+    expect(prompt).toContain("at least two credible current-season publisher domains");
+    expect(prompt).toContain("strongest established sources instead");
+  });
 });

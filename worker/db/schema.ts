@@ -504,6 +504,8 @@ export const sleeperReports = sqliteTable(
     generatedAt: integer("generated_at", { mode: "timestamp_ms" }).notNull(),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().default(nowMs),
     publishedAt: integer("published_at", { mode: "timestamp_ms" }),
+    discoverNewSources: integer("discover_new_sources", { mode: "boolean" }).notNull().default(false),
+    newPublisherCount: integer("new_publisher_count").notNull().default(0),
   },
   (table) => [
     uniqueIndex("sleeper_reports_job_unique").on(table.jobId),
@@ -556,6 +558,7 @@ export const sleeperCandidateSources = sqliteTable(
     publishedAt: integer("published_at", { mode: "timestamp_ms" }),
     recommendation: text("recommendation"),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().default(nowMs),
+    isNewDiscovery: integer("is_new_discovery", { mode: "boolean" }).notNull().default(false),
   },
   (table) => [
     uniqueIndex("sleeper_candidate_sources_domain_unique").on(table.candidateId, table.sourceDomain),

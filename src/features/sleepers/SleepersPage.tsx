@@ -103,7 +103,7 @@ function CandidateCard({ candidate, rank }: { candidate: SleeperCandidate; rank:
                 <a href={source.url} target="_blank" rel="noreferrer" key={`${source.url}-${source.title}`}>
                   <ExternalLink size={13} />
                   <span>
-                    <strong>{source.publisher}</strong>
+                    <strong>{source.publisher}{source.isNewDiscovery && <span className="sleeper-source-new">New source</span>}</strong>
                     <small>{source.title}{source.publishedAt ? ` \u00b7 ${new Date(source.publishedAt).toLocaleDateString()}` : ""}</small>
                     {source.recommendation && <em>{source.recommendation}</em>}
                   </span>
@@ -127,6 +127,7 @@ export default function SleepersPage({ localDevelopmentOverride }: { localDevelo
   const [notice, setNotice] = useState<string | null>(null);
   const [leagueSize, setLeagueSize] = useState(12);
   const [sleepersPerPosition, setSleepersPerPosition] = useState(8);
+  const [discoverNewSources, setDiscoverNewSources] = useState(true);
   const [pollBaseline, setPollBaseline] = useState<{ id: string | null; generatedAt: number } | null>(null);
   const tabRefs = useRef<Partial<Record<SleeperPosition, HTMLButtonElement | null>>>({});
   const ownerToken = loadOwnerToken();
@@ -216,7 +217,7 @@ export default function SleepersPage({ localDevelopmentOverride }: { localDevelo
     setIsSubmitting(true);
     setNotice(null);
     try {
-      await requestSleeperResearch(ownerToken, leagueSize, sleepersPerPosition);
+      await requestSleeperResearch(ownerToken, leagueSize, sleepersPerPosition, discoverNewSources);
       setNotice("Sleeper research queued. Results will publish here when your runner finishes.");
       setPollBaseline({
         id: report?.id ?? null,
@@ -251,6 +252,7 @@ export default function SleepersPage({ localDevelopmentOverride }: { localDevelo
         </div>
         <div className="sleeper-research-status__meta">
           <span><Clock3 size={13} /> {report ? formatFreshness(report.createdAt ?? report.generatedAt) : "No report yet"}</span>
+          {report?.discoverNewSources && <span className="sleeper-new-publisher-count"><Telescope size={13} /> {report.newPublisherCount ? `${report.newPublisherCount} new ${report.newPublisherCount === 1 ? "publisher" : "publishers"} found` : "No new publishers found"}</span>}
           <span><ShieldCheck size={13} /> Refresh is owner-controlled</span>
         </div>
       </section>
@@ -308,6 +310,11 @@ export default function SleepersPage({ localDevelopmentOverride }: { localDevelo
               <label><span>League size</span><select aria-label="League size" value={leagueSize} onChange={(event) => setLeagueSize(Number(event.target.value))}><option value={10}>10 teams</option><option value={12}>12 teams</option><option value={14}>14 teams</option></select></label>
               <label><span>Per position</span><select aria-label="Sleepers per position" value={sleepersPerPosition} onChange={(event) => setSleepersPerPosition(Number(event.target.value))}><option value={5}>5 players</option><option value={8}>8 players</option><option value={10}>10 players</option><option value={12}>12 players</option></select></label>
             </div>
+            <label className="sleeper-scout-toggle">
+              <input type="checkbox" checked={discoverNewSources} onChange={(event) => setDiscoverNewSources(event.target.checked)} />
+              <span className="sleeper-scout-toggle__control" aria-hidden="true"><i /></span>
+              <span><strong>Scout new publishers</strong><small>Try sources outside prior reports while retaining strong known sources.</small></span>
+            </label>
             <button className="button button--primary" type="button" disabled={!ownerReady || isSubmitting} onClick={() => void refreshResearch()}>
               {isSubmitting ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />} Research sleepers
             </button>

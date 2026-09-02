@@ -28,6 +28,7 @@ export function buildResearchPrompt(job: ResearchJob): string {
     "For sleepers_research, set rankingSnapshot and rankingSnapshots to null and return sleeperReport. Cover QB, RB, WR, and TE separately, with no more than the requested number of candidates per position.",
     "A sleeper source counts only when its current-season article or rankings page actually recommends, identifies, or positively targets that specific player as a sleeper or draft value. Give its direct URL and concise recommendation; do not cite search pages, homepages, copied aggregators, or synthetic agent opinions.",
     "Use at least three independent reputable publisher domains across the sleeper report. Do not repeat the same publisher domain for a player. The server deduplicates by domain and ranks each position by independent recommendation count.",
+    "When sleeper source discovery is enabled, try to include at least two credible current-season publisher domains that are absent from the server-provided known-domain snapshot. Verify that each new publisher actually recommends the player. If two qualifying new publishers cannot be verified, use the strongest established sources instead and say so in the report summary.",
     "For every sleeper candidate, recommend an earliest and latest OVERALL draft pick appropriate for the assignment's league size. Do not return round numbers—the server derives them from those overall picks. Explain upside and material risk without overstating certainty.",
     "",
     "BEGIN SERVER-VALIDATED ASSIGNMENT DATA",
@@ -38,6 +39,10 @@ export function buildResearchPrompt(job: ResearchJob): string {
     `Scope: ${input.scoringFormat}; ${input.rankingType}; ${input.position}; season ${input.season ?? "current"}; week ${input.week ?? "not specified"}`,
     ...(job.type === "sleepers_research" ? [
       `Sleeper settings: ${input.leagueSize ?? 12}-team league; up to ${input.sleepersPerPosition ?? 8} candidates per position.`,
+      `Sleeper source discovery: ${input.discoverNewSources ? "enabled" : "disabled"}.`,
+      ...(input.discoverNewSources ? [
+        `Previously used canonical publisher domains (server snapshot): ${(input.knownSourceDomains ?? []).join(", ") || "none"}.`,
+      ] : []),
     ] : []),
     ...(rankingRequest ? [rankingRequest] : []),
     "END SERVER-VALIDATED ASSIGNMENT DATA",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { researchResultSchema } from "./schemas.js";
+import { researchJobSchema, researchResultSchema } from "./schemas.js";
 
 function source(sourceName: string, sourceUrl: string) {
   return {
@@ -60,6 +60,32 @@ describe("multi-source research result", () => {
 });
 
 describe("sleeper research result", () => {
+  it("accepts only a bounded canonical-domain snapshot on claimed discovery jobs", () => {
+    const claimed = {
+      id: "13cb54a1-85eb-4e7e-bfb5-cc25cf712b7e",
+      type: "sleepers_research",
+      input: {
+        type: "sleepers_research",
+        scoringFormat: "ppr",
+        rankingType: "redraft",
+        position: "ALL",
+        discoverNewSources: true,
+        knownSourceDomains: ["fantasypros.com", "espn.com"],
+      },
+      attempt: 1,
+      maxAttempts: 3,
+      leaseToken: "f1f2d93e-50c6-41a9-a108-6c9ed8d12845",
+      leaseExpiresAt: "2026-09-01T22:00:00.000Z",
+      executionContext: "Research current sleeper sources.",
+    };
+
+    expect(researchJobSchema.parse(claimed).input.knownSourceDomains).toEqual(["fantasypros.com", "espn.com"]);
+    expect(researchJobSchema.safeParse({
+      ...claimed,
+      input: { ...claimed.input, knownSourceDomains: ["https://fantasypros.com/path"] },
+    }).success).toBe(false);
+  });
+
   it("accepts only HTTP(S) source hyperlinks", () => {
     const candidate = (position: "QB" | "RB" | "WR" | "TE", url: string) => ({
       playerName: `${position} Sleeper`,

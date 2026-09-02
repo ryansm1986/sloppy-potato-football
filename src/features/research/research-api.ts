@@ -60,6 +60,7 @@ export type CreateResearchJob = {
   rankingLimit?: number;
   leagueSize?: number;
   sleepersPerPosition?: number;
+  discoverNewSources?: boolean;
 };
 
 export class ResearchApiError extends Error {

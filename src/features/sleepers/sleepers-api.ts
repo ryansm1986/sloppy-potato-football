@@ -13,6 +13,7 @@ export type SleeperSource = {
   url: string;
   publishedAt: string | null;
   recommendation: string | null;
+  isNewDiscovery?: boolean;
 };
 
 export type SleeperCandidate = {
@@ -40,6 +41,8 @@ export type SleeperReport = {
   summary: string;
   generatedAt: string;
   createdAt?: string;
+  discoverNewSources?: boolean;
+  newPublisherCount?: number;
   positionSummaries?: Record<SleeperPosition, string>;
   positions: Record<SleeperPosition, SleeperCandidate[]>;
 };
@@ -59,6 +62,7 @@ export function requestSleeperResearch(
   token: string,
   leagueSize: number,
   sleepersPerPosition: number,
+  discoverNewSources: boolean,
 ): Promise<ResearchJob> {
   return createResearchJob(token, {
     type: "sleepers_research",
@@ -66,5 +70,6 @@ export function requestSleeperResearch(
     rankingType: "redraft",
     leagueSize,
     sleepersPerPosition,
+    discoverNewSources,
   });
 }

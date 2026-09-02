@@ -71,6 +71,8 @@ type PersistSleeperReportOptions = {
   rankingType: "redraft";
   leagueSize: number;
   sleepersPerPosition: number;
+  discoverNewSources: boolean;
+  knownSourceDomains: string[];
   generatedAt: string;
   report: SleeperReportInput;
 };
@@ -98,6 +100,42 @@ export function canonicalSourceDomain(url: string) {
   return commonMultiLabelPublicSuffixes.has(finalTwo)
     ? labels.slice(-3).join(".")
     : finalTwo;
+}
+
+export async function snapshotKnownSleeperSourceDomains(db: Database) {
+  const rows = await db.$client.prepare(
+    `SELECT sources.source_domain, MAX(reports.published_at) AS last_published_at
+     FROM sleeper_candidate_sources sources
+     JOIN sleeper_candidates candidates ON candidates.id = sources.candidate_id
+     JOIN sleeper_reports reports ON reports.id = candidates.report_id
+     WHERE reports.published_at IS NOT NULL
+     GROUP BY sources.source_domain
+     ORDER BY last_published_at DESC, sources.source_domain
+     LIMIT 50`,
+  ).all<{ source_domain: string }>();
+  const domains: string[] = [];
+  let characterCount = 0;
+  for (const row of rows.results) {
+    const domain = row.source_domain.trim().toLowerCase();
+    if (!domain || domain.length > 253 || characterCount + domain.length > 1_200) continue;
+    domains.push(domain);
+    characterCount += domain.length;
+    if (domains.length === 40) break;
+  }
+  return domains;
+}
+
+async function loadAllPublishedSleeperSourceDomains(db: Database) {
+  const rows = await db.$client.prepare(
+    `SELECT DISTINCT sources.source_domain
+     FROM sleeper_candidate_sources sources
+     JOIN sleeper_candidates candidates ON candidates.id = sources.candidate_id
+     JOIN sleeper_reports reports ON reports.id = candidates.report_id
+     WHERE reports.published_at IS NOT NULL`,
+  ).all<{ source_domain: string }>();
+  return rows.results
+    .map((row) => row.source_domain.trim().toLowerCase())
+    .filter(Boolean);
 }
 
 function dedupeSources(sources: SleeperReportInput["candidates"][number]["sources"]) {
@@ -128,10 +166,27 @@ export async function persistSleeperReport(db: Database, options: PersistSleeper
     ...candidate,
     sources: dedupeSources(candidate.sources),
   }));
-  const allDomains = new Set(normalized.flatMap((candidate) => candidate.sources.map((source) => source.domain)));
-  const allPublishers = new Set(normalized.flatMap((candidate) => candidate.sources.map((source) => (
+  const selectedCandidates = sleeperPositions.flatMap((position) => normalized
+    .filter((candidate) => candidate.position === position)
+    .sort((left, right) => right.sources.length - left.sources.length
+      || left.recommendedPickStart - right.recommendedPickStart
+      || left.playerName.localeCompare(right.playerName))
+    .slice(0, options.sleepersPerPosition));
+  const allDomains = new Set(selectedCandidates.flatMap((candidate) => candidate.sources.map((source) => source.domain)));
+  const allPublishers = new Set(selectedCandidates.flatMap((candidate) => candidate.sources.map((source) => (
     source.publisher.toLowerCase().replace(/[^a-z0-9]+/g, "")
   ))));
+  // The runner receives a compact history snapshot to keep its prompt bounded,
+  // but classification must compare against the complete published history so
+  // an older source never becomes "new" again after falling out of that prompt.
+  const knownSourceDomains = new Set([
+    ...options.knownSourceDomains.map((domain) => domain.toLowerCase()),
+    ...await loadAllPublishedSleeperSourceDomains(db),
+  ]);
+  const newSourceDomains = new Set(options.discoverNewSources
+    ? selectedCandidates.flatMap((candidate) => candidate.sources.map((source) => source.domain))
+      .filter((domain) => !knownSourceDomains.has(domain))
+    : []);
   if (allDomains.size < 3 || allPublishers.size < 3) {
     throw new z.ZodError([{
       code: "custom",
@@ -151,8 +206,9 @@ export async function persistSleeperReport(db: Database, options: PersistSleeper
   const now = Date.now();
   await db.$client.prepare(
       `INSERT INTO sleeper_reports
-       (id, job_id, season, scoring_format, ranking_type, league_size, summary, generated_at, created_at, published_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+       (id, job_id, season, scoring_format, ranking_type, league_size, summary, generated_at,
+        created_at, published_at, discover_new_sources, new_publisher_count)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
     ).bind(
       reportId,
       options.jobId,
@@ -163,6 +219,8 @@ export async function persistSleeperReport(db: Database, options: PersistSleeper
       options.report.summary,
       Date.parse(options.generatedAt),
       now,
+      options.discoverNewSources ? 1 : 0,
+      newSourceDomains.size,
     ).run();
   const statements: D1PreparedStatement[] = [];
 
@@ -171,12 +229,7 @@ export async function persistSleeperReport(db: Database, options: PersistSleeper
       "INSERT INTO sleeper_position_summaries (report_id, position, summary) VALUES (?, ?, ?)",
     ).bind(reportId, position, options.report.positionSummaries[position]));
 
-    const candidates = normalized
-      .filter((candidate) => candidate.position === position)
-      .sort((left, right) => right.sources.length - left.sources.length
-        || left.recommendedPickStart - right.recommendedPickStart
-        || left.playerName.localeCompare(right.playerName))
-      .slice(0, options.sleepersPerPosition);
+    const candidates = selectedCandidates.filter((candidate) => candidate.position === position);
 
     for (const [index, candidate] of candidates.entries()) {
       const candidateId = crypto.randomUUID();
@@ -203,8 +256,9 @@ export async function persistSleeperReport(db: Database, options: PersistSleeper
       for (const source of candidate.sources) {
         statements.push(db.$client.prepare(
           `INSERT INTO sleeper_candidate_sources
-           (id, candidate_id, publisher, title, url, source_domain, published_at, recommendation, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, candidate_id, publisher, title, url, source_domain, published_at, recommendation,
+            created_at, is_new_discovery)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         ).bind(
           crypto.randomUUID(),
           candidateId,
@@ -215,6 +269,7 @@ export async function persistSleeperReport(db: Database, options: PersistSleeper
           source.publishedAt ? Date.parse(source.publishedAt) : null,
           source.recommendation,
           now,
+          newSourceDomains.has(source.domain) ? 1 : 0,
         ));
       }
     }
@@ -250,6 +305,8 @@ type ReportRow = {
   generated_at: number;
   created_at: number;
   published_at: number;
+  discover_new_sources: number;
+  new_publisher_count: number;
 };
 
 type CandidateRow = {
@@ -274,11 +331,13 @@ type SourceRow = {
   url: string;
   published_at: number | null;
   recommendation: string | null;
+  is_new_discovery: number;
 };
 
 export async function getLatestSleeperReport(db: Database) {
   const report = await db.$client.prepare(
-    `SELECT id, season, scoring_format, ranking_type, league_size, summary, generated_at, created_at
+    `SELECT id, season, scoring_format, ranking_type, league_size, summary, generated_at, created_at,
+            discover_new_sources, new_publisher_count
      FROM sleeper_reports WHERE published_at IS NOT NULL ORDER BY published_at DESC, id DESC LIMIT 1`,
   ).first<ReportRow>();
   if (!report) return null;
@@ -296,7 +355,7 @@ export async function getLatestSleeperReport(db: Database) {
   const sourceRows = candidateIds.length === 0
     ? { results: [] as SourceRow[] }
     : await db.$client.prepare(
-      `SELECT id, candidate_id, publisher, title, url, published_at, recommendation
+      `SELECT id, candidate_id, publisher, title, url, published_at, recommendation, is_new_discovery
        FROM sleeper_candidate_sources
        WHERE candidate_id IN (SELECT value FROM json_each(?))
        ORDER BY publisher, id`,
@@ -335,6 +394,7 @@ export async function getLatestSleeperReport(db: Database) {
         url: source.url,
         publishedAt: source.published_at === null ? null : new Date(source.published_at).toISOString(),
         recommendation: source.recommendation,
+        isNewDiscovery: source.is_new_discovery === 1,
       })),
     })),
   ])) as Record<typeof sleeperPositions[number], unknown[]>;
@@ -345,6 +405,8 @@ export async function getLatestSleeperReport(db: Database) {
     scoringFormat: report.scoring_format,
     rankingType: report.ranking_type,
     leagueSize: report.league_size,
+    discoverNewSources: report.discover_new_sources === 1,
+    newPublisherCount: report.new_publisher_count,
     summary: report.summary,
     positionSummaries,
     generatedAt: new Date(report.generated_at).toISOString(),

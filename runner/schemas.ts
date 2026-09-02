@@ -22,6 +22,9 @@ export const researchJobInputSchema = z.object({
   rankingLimit: z.number().int().min(1).max(500).optional(),
   leagueSize: z.number().int().min(4).max(20).optional(),
   sleepersPerPosition: z.number().int().min(1).max(20).optional(),
+  discoverNewSources: z.boolean().optional(),
+  knownSourceDomains: z.array(z.string().trim().toLowerCase().min(1).max(253)
+    .regex(/^[a-z0-9.-]+$/)).max(40).optional(),
 }).strict();
 
 export const researchJobSchema = z.object({
