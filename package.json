@@ -1,7 +1,7 @@
 {
   "name": "sloppy-potato-fantasy-football",
   "private": true,
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Fantasy football research, rankings, and local agent runner.",
   "author": "Ryan Smith",
   "type": "module",
@@ -30,7 +30,8 @@
     "desktop:dev": "pnpm desktop:build:shell && concurrently -k \"vite\" \"wait-on http-get://127.0.0.1:5173 && cross-env SLOPPY_POTATO_DESKTOP_DEV_URL=http://127.0.0.1:5173 electron .\"",
     "desktop:test": "vitest run --config desktop/vitest.config.ts",
     "desktop:typecheck": "tsc -p desktop/tsconfig.json --pretty false",
-    "desktop:pack": "pnpm desktop:build && electron-builder --win nsis portable",
+    "desktop:pack": "pnpm desktop:build && electron-builder --win nsis portable && pnpm desktop:verify:package-assets",
+    "desktop:verify:package-assets": "node desktop/scripts/verify-packaged-assets.mjs",
     "desktop:dist": "pnpm desktop:typecheck && pnpm desktop:test && pnpm desktop:pack",
     "check": "pnpm typecheck && pnpm test && pnpm test:runner && pnpm desktop:typecheck && pnpm desktop:test && pnpm build && pnpm desktop:build:shell",
     "deploy": "pnpm check && pnpm db:migrate:remote && wrangler deploy"
@@ -81,6 +82,12 @@
       "dist/client/**/*",
       "dist-desktop/**/*",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "runner/schemas/research-result.schema.json",
+        "to": "schemas/research-result.schema.json"
+      }
     ],
     "directories": {
       "output": "release-desktop"

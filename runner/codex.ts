@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { mkdir, readFile, rm } from "node:fs/promises";
-import { relative, resolve } from "node:path";
+import { relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RunnerConfig } from "./config.js";
 import { resolveCodexInvocation } from "./codex-command.js";
@@ -15,6 +15,18 @@ export type SpawnImplementation = (
 ) => ChildProcessWithoutNullStreams;
 
 const OUTPUT_LIMIT_BYTES = 1_000_000;
+const RESEARCH_RESULT_SCHEMA_FILE = "research-result.schema.json";
+
+export function resolveResearchResultSchemaPath(
+  moduleUrl = import.meta.url,
+  resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath,
+): string {
+  const adjacentPath = fileURLToPath(new URL(`./schemas/${RESEARCH_RESULT_SCHEMA_FILE}`, moduleUrl));
+  const asarSegment = `${sep}app.asar${sep}`;
+  if (!adjacentPath.toLowerCase().includes(asarSegment.toLowerCase())) return adjacentPath;
+  if (!resourcesPath) throw new Error("Packaged desktop resources path is unavailable");
+  return resolve(resourcesPath, "schemas", RESEARCH_RESULT_SCHEMA_FILE);
+}
 
 export function codexChildEnvironment(
   invocation: ReturnType<typeof resolveCodexInvocation>,
@@ -63,7 +75,7 @@ export async function executeCodexJob(
 ): Promise<ResearchResult> {
   assertIsolatedWorkspace(config.workspace);
   await mkdir(config.workspace, { recursive: true });
-  const schemaPath = fileURLToPath(new URL("./schemas/research-result.schema.json", import.meta.url));
+  const schemaPath = resolveResearchResultSchemaPath();
   const outputPath = resolve(config.workspace, `result-${job.id.replace(/[^a-zA-Z0-9_-]/g, "-")}.json`);
   await rm(outputPath, { force: true });
   const invocation = resolveCodexInvocation();

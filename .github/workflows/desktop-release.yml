@@ -49,6 +49,8 @@ jobs:
         run: |
           pnpm exec electron-builder --win nsis --publish never
           if ($LASTEXITCODE -ne 0) { throw "Desktop packaging failed." }
+          pnpm desktop:verify:package-assets
+          if ($LASTEXITCODE -ne 0) { throw "Packaged desktop asset verification failed." }
 
           $packageVersion = (Get-Content package.json | ConvertFrom-Json).version
           $installers = @(Get-ChildItem -LiteralPath release-desktop -Filter '*Setup*.exe')

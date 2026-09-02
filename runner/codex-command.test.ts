@@ -1,9 +1,25 @@
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { resolveCodexInvocation } from "./codex-command.js";
-import { codexChildEnvironment } from "./codex.js";
+import { codexChildEnvironment, resolveResearchResultSchemaPath } from "./codex.js";
 
 describe("Codex command resolution", () => {
+  it("keeps the adjacent schema path outside a packaged ASAR", () => {
+    const modulePath = resolve("dist-desktop", "main", "entry.js");
+    expect(resolveResearchResultSchemaPath(pathToFileURL(modulePath).href)).toBe(
+      resolve("dist-desktop", "main", "schemas", "research-result.schema.json"),
+    );
+  });
+
+  it("uses a physical resources path when the desktop bundle runs inside an ASAR", () => {
+    const resourcesPath = resolve("test-install", "resources");
+    const modulePath = resolve(resourcesPath, "app.asar", "dist-desktop", "main", "entry.js");
+    expect(resolveResearchResultSchemaPath(pathToFileURL(modulePath).href, resourcesPath)).toBe(
+      resolve(resourcesPath, "schemas", "research-result.schema.json"),
+    );
+  });
+
   it("uses the native command on non-Windows systems", () => {
     expect(resolveCodexInvocation({}, "linux")).toEqual({ command: "codex", prefixArgs: [] });
   });
