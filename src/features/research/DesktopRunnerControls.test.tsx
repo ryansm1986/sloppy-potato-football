@@ -69,6 +69,23 @@ describe("DesktopRunnerControls", () => {
     expect(screen.getByRole("button", { name: /set up this computer/i })).toBeDisabled();
   });
 
+  it("loads the existing owner token from a selected .env.runner file", async () => {
+    const api = desktopApi(false);
+    window.sloppyPotatoDesktop = api;
+    render(<DesktopRunnerControls />);
+    const ownerToken = `owner_${"x".repeat(48)}`;
+    const file = new File([
+      `AGENT_RUNNER_TOKEN=runner-secret\nRESEARCH_OWNER_TOKEN=${ownerToken}\n`,
+    ], ".env.runner", { type: "text/plain" });
+
+    fireEvent.change(await screen.findByLabelText("Choose .env.runner file"), {
+      target: { files: [file] },
+    });
+
+    await waitFor(() => expect(screen.getByLabelText("Owner token")).toHaveValue(ownerToken));
+    expect(screen.getByRole("button", { name: /set up this computer/i })).toBeEnabled();
+  });
+
   it("uses saved owner access without displaying the token", async () => {
     const api = desktopApi(false);
     window.sloppyPotatoDesktop = api;

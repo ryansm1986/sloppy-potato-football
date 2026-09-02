@@ -180,6 +180,20 @@ button:focus-visible, a:focus-visible {
 }
 .desktop-update:hover:not(:disabled) { border-color: rgba(245, 158, 11, .62); background: var(--amber-soft); transform: translateY(-1px); }
 .desktop-update:disabled { cursor: progress; }
+.desktop-update--idle {
+  width: 33px;
+  min-height: 33px;
+  grid-template-columns: 31px;
+  gap: 0;
+  justify-self: start;
+  overflow: visible;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+}
+.desktop-update--idle:hover:not(:disabled) { border-color: var(--border); background: var(--surface); transform: none; }
+.desktop-update--idle .desktop-update__icon { color: var(--muted); background: transparent; }
+.desktop-update--idle:hover:not(:disabled) .desktop-update__icon { color: var(--amber); }
 .desktop-update__icon {
   position: relative;
   z-index: 1;
@@ -790,6 +804,11 @@ tbody tr:hover { background: rgba(255, 255, 255, .015); }
 .desktop-token-feedback.is-ready { color: var(--green); }
 .desktop-token-feedback.is-pending { color: var(--amber); }
 .desktop-token-error { margin: 0; }
+.desktop-owner-token-import { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--border-soft); border-radius: 5px; background: rgba(255, 255, 255, .015); }
+.desktop-owner-token-import button { width: fit-content; min-height: 30px; display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; color: var(--amber); border: 1px solid rgba(245, 158, 11, .3); border-radius: 4px; background: var(--amber-soft); font-size: 7px; font-weight: 800; cursor: pointer; }
+.desktop-owner-token-import button:disabled { color: var(--subtle); border-color: var(--border); background: transparent; cursor: progress; }
+.desktop-owner-token-import span { color: var(--subtle); font-size: 7px; line-height: 1.5; }
+.desktop-owner-token-import code { color: var(--text); }
 .desktop-manual-token { padding-top: 3px; border-top: 1px solid var(--border-soft); }
 .desktop-manual-token summary, .desktop-credential-management summary { padding: 8px 0; color: var(--subtle); font-size: 7px; font-weight: 800; cursor: pointer; }
 .desktop-manual-token[open] { display: grid; gap: 8px; }

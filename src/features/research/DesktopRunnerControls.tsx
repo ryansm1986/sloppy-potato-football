@@ -1,6 +1,7 @@
 import { Bot, KeyRound, LoaderCircle, Pause, Play, Power, Settings2, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { DesktopSettings, RunnerLogEntry, RunnerStatus } from "../../../desktop/shared/contracts";
+import { readOwnerTokenFromEnvironmentFile } from "./owner-token-file";
 
 type DesktopRunnerControlsProps = {
   ownerToken?: string;
@@ -19,6 +20,7 @@ export default function DesktopRunnerControls({ ownerToken = "" }: DesktopRunner
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const ownerTokenFileInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!desktop) return;
@@ -101,6 +103,20 @@ export default function DesktopRunnerControls({ ownerToken = "" }: DesktopRunner
     }
   }
 
+  async function importOwnerToken(file: File | undefined) {
+    if (!file) return;
+    setBusy("owner-token-file");
+    setError(null);
+    try {
+      setOwnerTokenDraft(await readOwnerTokenFromEnvironmentFile(file));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not read the owner token file.");
+    } finally {
+      setBusy(null);
+      if (ownerTokenFileInput.current) ownerTokenFileInput.current.value = "";
+    }
+  }
+
   async function removeToken() {
     setBusy("remove");
     setError(null);
@@ -139,6 +155,13 @@ export default function DesktopRunnerControls({ ownerToken = "" }: DesktopRunner
           ) : !ownerTokenDraft.trim() ? (
             <p className="desktop-token-feedback">Enter an owner token here or save one under Private bridge access to continue.</p>
           ) : null}
+          {!ownerToken.trim() && (
+            <div className="desktop-owner-token-import">
+              <input ref={ownerTokenFileInput} aria-label="Choose .env.runner file" hidden type="file" onChange={(event) => { void importOwnerToken(event.target.files?.[0]); }} />
+              <button type="button" disabled={busy !== null} onClick={() => ownerTokenFileInput.current?.click()}><KeyRound size={13} /> Load existing .env.runner</button>
+              <span>No file yet? Run <code>pnpm bridge:setup</code> once from the project folder. It securely creates and registers the owner token with Cloudflare.</span>
+            </div>
+          )}
           <button className="button button--primary" type="button" disabled={!effectiveOwnerToken || !deviceName.trim() || busy !== null} onClick={() => { void enrollRunner(); }}>{busy === "enroll" ? <LoaderCircle className="spin" size={13} /> : <KeyRound size={13} />} {busy === "enroll" ? "Setting up…" : "Set up this computer"}</button>
           {busy === "enroll" && <p className="desktop-token-feedback is-pending" role="status">Creating and securing this computer's runner credential…</p>}
           {error && <p className="research-error desktop-token-error" role="alert">{error}</p>}

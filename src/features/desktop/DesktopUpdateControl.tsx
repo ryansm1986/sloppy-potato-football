@@ -126,10 +126,12 @@ export default function DesktopUpdateControl() {
       <span className="desktop-update__icon">
         <UpdateIcon status={status} />
       </span>
-      <span className="desktop-update__copy" role="status" aria-live="polite">
-        <strong>{label}</strong>
-        <small>{description}</small>
-      </span>
+      {status.phase !== "idle" && (
+        <span className="desktop-update__copy" role="status" aria-live="polite">
+          <strong>{label}</strong>
+          <small>{description}</small>
+        </span>
+      )}
       {status.phase === "downloading" && (
         <span
           aria-hidden="true"

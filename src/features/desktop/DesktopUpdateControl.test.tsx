@@ -49,7 +49,10 @@ describe("DesktopUpdateControl", () => {
     const bridge = installDesktopBridge({ phase: "idle", currentVersion: "0.1.0" });
     render(<DesktopUpdateControl />);
 
-    fireEvent.click(await screen.findByRole("button", { name: /check for updates.*look for a newer desktop version/i }));
+    const checkButton = await screen.findByRole("button", { name: /check for updates.*look for a newer desktop version/i });
+    expect(checkButton).toHaveClass("desktop-update--idle");
+    expect(checkButton.querySelector(".desktop-update__copy")).not.toBeInTheDocument();
+    fireEvent.click(checkButton);
 
     await waitFor(() => expect(bridge.updates.check).toHaveBeenCalledOnce());
   });
