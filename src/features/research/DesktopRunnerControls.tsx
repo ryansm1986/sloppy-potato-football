@@ -151,15 +151,15 @@ export default function DesktopRunnerControls({ ownerToken = "" }: DesktopRunner
           <label><span>Computer name</span><input aria-label="Computer name" value={deviceName} maxLength={100} onChange={(event) => setDeviceName(event.target.value)} /></label>
           <label><span>{ownerToken.trim() ? "Use a different owner token (optional)" : "Owner token"}</span><input aria-label="Owner token" type="password" value={ownerTokenDraft} onChange={(event) => setOwnerTokenDraft(event.target.value)} placeholder={ownerToken.trim() ? "Saved owner access will be used" : "Paste RESEARCH_OWNER_TOKEN"} autoComplete="off" /></label>
           {ownerToken.trim() ? (
-            <p className="desktop-token-feedback is-ready" role="status"><KeyRound size={12} /> Saved Research Desk owner access is ready. The token remains hidden.</p>
+            <p className="desktop-token-feedback is-ready" role="status"><KeyRound size={12} /> Saved owner access from Settings is ready. The token remains hidden.</p>
           ) : !ownerTokenDraft.trim() ? (
-            <p className="desktop-token-feedback">Enter an owner token here or save one under Private bridge access to continue.</p>
+            <p className="desktop-token-feedback">Enter an owner token here or save one under Access &amp; security to continue.</p>
           ) : null}
           {!ownerToken.trim() && (
             <div className="desktop-owner-token-import">
               <input ref={ownerTokenFileInput} aria-label="Choose .env.runner file" hidden type="file" onChange={(event) => { void importOwnerToken(event.target.files?.[0]); }} />
               <button type="button" disabled={busy !== null} onClick={() => ownerTokenFileInput.current?.click()}><KeyRound size={13} /> Load existing .env.runner</button>
-              <span>No file yet? Run <code>pnpm bridge:setup</code> once from the project folder. It securely creates and registers the owner token with Cloudflare.</span>
+              <span>Already have a legacy setup file? Import it here. New owner access is managed above.</span>
             </div>
           )}
           <button className="button button--primary" type="button" disabled={!effectiveOwnerToken || !deviceName.trim() || busy !== null} onClick={() => { void enrollRunner(); }}>{busy === "enroll" ? <LoaderCircle className="spin" size={13} /> : <KeyRound size={13} />} {busy === "enroll" ? "Setting up…" : "Set up this computer"}</button>

@@ -92,7 +92,7 @@ describe("DesktopRunnerControls", () => {
     const savedOwnerToken = "s".repeat(48);
     render(<DesktopRunnerControls ownerToken={savedOwnerToken} />);
 
-    expect(await screen.findByText(/saved Research Desk owner access is ready/i)).toBeInTheDocument();
+    expect(await screen.findByText(/saved owner access from Settings is ready/i)).toBeInTheDocument();
     expect(screen.getByLabelText("Owner token")).toHaveValue("");
     const setup = screen.getByRole("button", { name: /set up this computer/i });
     expect(setup).toBeEnabled();

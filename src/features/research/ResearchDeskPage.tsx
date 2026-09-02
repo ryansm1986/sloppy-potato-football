@@ -13,7 +13,6 @@ import {
   Newspaper,
   Play,
   RefreshCw,
-  Save,
   Send,
   ShieldCheck,
   Sparkles,
@@ -24,7 +23,7 @@ import {
   WifiOff,
 } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router";
+import { NavLink, useSearchParams } from "react-router";
 import { fetchAgentRankings, type AgentRankingSnapshot } from "../rankings/agent-api";
 import {
   DEFAULT_LEAGUE_SIZE,
@@ -40,13 +39,10 @@ import {
   deleteResearchSchedule,
   fetchResearchJobs,
   fetchResearchSchedules,
-  fetchRunnerCredentials,
   fetchRunnerStatus,
   isLocalDevelopment,
-  RESEARCH_OWNER_TOKEN_KEY,
   ResearchApiError,
   retryResearchJob,
-  revokeRunnerCredential,
   runResearchScheduleNow,
   runnerDisplayState,
   updateResearchSchedule,
@@ -56,10 +52,9 @@ import {
   type ResearchJobStatus,
   type ResearchJobType,
   type RunnerState,
-  type RunnerCredential,
   type RunnerStatus,
 } from "./research-api";
-import DesktopRunnerControls from "./DesktopRunnerControls";
+import { useResearchOwnerAccess } from "./useResearchOwnerAccess";
 
 type BridgeAccessState = "locked" | "checking" | "authorized" | "denied";
 type RunnerDisplayState = RunnerState | "locked";
@@ -90,10 +85,6 @@ function nextQuarterHour(): string {
   const value = new Date(Date.now() + 15 * 60_000);
   value.setMinutes(Math.ceil(value.getMinutes() / 15) * 15, 0, 0);
   return `${String(value.getHours()).padStart(2, "0")}:${String(value.getMinutes()).padStart(2, "0")}`;
-}
-
-function loadToken(): string {
-  return window.localStorage.getItem(RESEARCH_OWNER_TOKEN_KEY) ?? "";
 }
 
 function formatRelativeDate(value: string | null): string {
@@ -159,10 +150,8 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
   const favoriteSource = searchParams.get("sourceName") ?? "";
   const requestedPlayer = searchParams.get("subject") ?? "";
   const localDevelopment = localDevelopmentOverride ?? isLocalDevelopment();
-  const [ownerToken, setOwnerToken] = useState(loadToken);
-  const [tokenDraft, setTokenDraft] = useState(loadToken);
+  const { ownerToken, revision: tokenRevision } = useResearchOwnerAccess();
   const [accessState, setAccessState] = useState<BridgeAccessState>(() => localDevelopment || Boolean(ownerToken) ? "checking" : "locked");
-  const [tokenRevision, setTokenRevision] = useState(0);
   const [jobType, setJobType] = useState<ResearchJobType>(favoriteSource ? "source_refresh" : "player_research");
   const [subject, setSubject] = useState(requestedPlayer);
   const [source, setSource] = useState(favoriteSource);
@@ -179,10 +168,6 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
   const [scheduleDays, setScheduleDays] = useState<number[]>([1, 2, 3, 4, 5]);
   const [scheduleBusy, setScheduleBusy] = useState<string | null>(null);
   const [runner, setRunner] = useState<RunnerStatus | null>(null);
-  const [runnerCredentials, setRunnerCredentials] = useState<RunnerCredential[]>([]);
-  const [credentialBusy, setCredentialBusy] = useState<string | null>(null);
-  const [credentialToRevoke, setCredentialToRevoke] = useState<string | null>(null);
-  const [credentialLoadError, setCredentialLoadError] = useState<string | null>(null);
   const [snapshots, setSnapshots] = useState<AgentRankingSnapshot[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
@@ -208,25 +193,14 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
     if (!canAttemptAccess) return;
     setIsLoading(true);
     try {
-      const credentialsRequest = fetchRunnerCredentials(ownerToken, signal).catch((error: unknown) => {
-        if (error instanceof DOMException && error.name === "AbortError") throw error;
-        if (error instanceof ResearchApiError && (error.status === 401 || error.status === 403)) throw error;
-        setCredentialLoadError(error instanceof Error ? error.message : "Could not load connected runners.");
-        return null;
-      });
-      const [nextJobs, nextRunner, nextSchedules, nextRunnerCredentials] = await Promise.all([
+      const [nextJobs, nextRunner, nextSchedules] = await Promise.all([
         fetchResearchJobs(ownerToken, signal),
         fetchRunnerStatus(ownerToken, signal),
         fetchResearchSchedules(ownerToken, signal).catch(() => []),
-        credentialsRequest,
       ]);
       setJobs(nextJobs);
       setRunner(nextRunner);
       setSchedules(nextSchedules);
-      if (nextRunnerCredentials) {
-        setRunnerCredentials(nextRunnerCredentials);
-        setCredentialLoadError(null);
-      }
       setAccessState("authorized");
       setPollError(null);
     } catch (error) {
@@ -235,9 +209,7 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
         setAccessState("denied");
         setJobs([]);
         setRunner(null);
-        setRunnerCredentials([]);
-        setCredentialLoadError(null);
-        setPollError("Owner token rejected. Replace it below and save again.");
+        setPollError("Owner access was rejected. Open Settings to replace or remove it.");
       } else {
         setPollError(error instanceof Error ? error.message : "Could not reach the research bridge.");
       }
@@ -254,6 +226,15 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
       .catch(() => undefined);
     return () => controller.abort();
   }, [leagueSize]);
+
+  useEffect(() => {
+    if (!canAttemptAccess) {
+      setAccessState("locked");
+      setJobs([]);
+      setRunner(null);
+      setPollError(null);
+    }
+  }, [canAttemptAccess, tokenRevision]);
 
   useEffect(() => {
     if (!canAttemptAccess) return;
@@ -277,35 +258,6 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
       ...(jobType === "rankings_research" ? { position, rankingLimit, discoverNewSources } : {}),
       ...(jobType === "sleepers_research" ? { sleepersPerPosition, discoverNewSources } : {}),
     };
-  }
-
-  function saveToken() {
-    const cleanToken = tokenDraft.trim();
-    if (cleanToken) window.localStorage.setItem(RESEARCH_OWNER_TOKEN_KEY, cleanToken);
-    else window.localStorage.removeItem(RESEARCH_OWNER_TOKEN_KEY);
-    setOwnerToken(cleanToken);
-    setAccessState(localDevelopment || cleanToken ? "checking" : "locked");
-    setJobs([]);
-    setRunner(null);
-    setRunnerCredentials([]);
-    setCredentialLoadError(null);
-    setPollError(null);
-    setTokenRevision((current) => current + 1);
-    setNotice(cleanToken ? "Owner token saved only in this browser." : "Owner token removed from this browser.");
-  }
-
-  function removeToken() {
-    window.localStorage.removeItem(RESEARCH_OWNER_TOKEN_KEY);
-    setTokenDraft("");
-    setOwnerToken("");
-    setJobs([]);
-    setRunner(null);
-    setRunnerCredentials([]);
-    setCredentialLoadError(null);
-    setAccessState(localDevelopment ? "checking" : "locked");
-    setPollError(null);
-    setTokenRevision((current) => current + 1);
-    setNotice("Owner token removed from this browser.");
   }
 
   async function submit(event: FormEvent) {
@@ -384,24 +336,6 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
       setNotice(error instanceof Error ? error.message : "Could not delete this schedule.");
     } finally {
       setScheduleBusy(null);
-    }
-  }
-
-  async function revokeCredential(credential: RunnerCredential) {
-    setCredentialBusy(credential.id);
-    setNotice(null);
-    try {
-      await revokeRunnerCredential(ownerToken, credential.id);
-      const revokedAt = new Date().toISOString();
-      setRunnerCredentials((current) => current.map((item) => item.id === credential.id
-        ? { ...item, active: false, revokedAt, updatedAt: revokedAt }
-        : item));
-      setCredentialToRevoke(null);
-      setNotice(`${credential.name} was revoked. Its saved token can no longer claim research jobs.`);
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Could not revoke this runner credential.");
-    } finally {
-      setCredentialBusy(null);
     }
   }
 
@@ -530,7 +464,7 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
                 <span>No shell commands or unrestricted prompts</span>
               </div>
               <div className="research-submit-row">
-                <span>{authorized ? <><CheckCircle2 size={14} /> Owner access ready</> : <><KeyRound size={14} /> Save the owner token to dispatch</>}</span>
+                <span>{authorized ? <><CheckCircle2 size={14} /> Owner access ready</> : <><KeyRound size={14} /> <NavLink to="/settings">Open Settings</NavLink> to unlock research</>}</span>
                 <button className="button button--primary" type="submit" disabled={!canSubmit}>{isSubmitting ? <LoaderCircle className="spin" size={14} /> : <Send size={14} />} Queue research</button>
               </div>
             </form>
@@ -575,43 +509,10 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
         </div>
 
         <aside className="research-side">
-          <DesktopRunnerControls ownerToken={ownerToken} />
-          <section className="panel runner-devices" aria-label="Connected runner devices">
-            <header>
-              <div><p className="eyebrow">Device security</p><h2>Connected Runners</h2></div>
-              <span>{runnerCredentials.filter((credential) => credential.active).length} active</span>
-            </header>
-            {!authorized ? (
-              <div className="runner-devices__empty"><KeyRound size={18} /><p>Save your owner token to manage runner access.</p></div>
-            ) : credentialLoadError ? (
-              <div className="runner-devices__empty"><AlertCircle size={18} /><p>{credentialLoadError}</p></div>
-            ) : runnerCredentials.length === 0 ? (
-              <div className="runner-devices__empty"><Bot size={18} /><p>No device-specific runners are enrolled yet. Set up a computer from the desktop app.</p></div>
-            ) : runnerCredentials.map((credential) => (
-              <article key={credential.id} className={!credential.active ? "is-revoked" : ""}>
-                <div className="runner-devices__identity">
-                  <strong>{credential.name}</strong>
-                  <span>{credential.active ? "Active" : "Revoked"} · {credential.tokenHint}</span>
-                  <small>{credential.runnerId} · Last used {formatRelativeDate(credential.lastUsedAt)}</small>
-                </div>
-                {credential.active && credentialToRevoke !== credential.id && (
-                  <button className="is-danger" type="button" disabled={credentialBusy !== null} aria-label={`Revoke ${credential.name}`} onClick={() => setCredentialToRevoke(credential.id)}>Revoke</button>
-                )}
-                {credential.active && credentialToRevoke === credential.id && (
-                  <div className="runner-devices__confirm">
-                    <span>Disable this computer's cloud access?</span>
-                    <button className="is-danger" type="button" disabled={credentialBusy !== null} aria-label={`Confirm revoke ${credential.name}`} onClick={() => { void revokeCredential(credential); }}>{credentialBusy === credential.id ? "Revoking…" : "Confirm revoke"}</button>
-                    <button type="button" disabled={credentialBusy !== null} onClick={() => setCredentialToRevoke(null)}>Cancel</button>
-                  </div>
-                )}
-              </article>
-            ))}
-            <p className="runner-devices__note"><ShieldCheck size={12} /> Revoking disables the cloud credential. Removing it inside the desktop app only removes the local encrypted copy.</p>
-          </section>
           <section className="panel job-queue" aria-label="Research job queue">
             <header><div><p className="eyebrow">Cloud queue</p><h2>Job Queue</h2></div><span>{jobs.length}</span></header>
             {!authorized ? (
-              <div className="queue-empty"><KeyRound size={20} /><p>Save your owner token to load the private queue.</p></div>
+              <div className="queue-empty"><KeyRound size={20} /><p><NavLink to="/settings">Open Settings</NavLink> to unlock the private queue.</p></div>
             ) : jobs.length === 0 ? (
               <div className="queue-empty"><CircleDashed size={20} /><p>{isLoading ? "Loading jobs…" : "No assignments yet."}</p></div>
             ) : jobs.slice(0, 10).map((job) => (
@@ -635,21 +536,8 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
               <div><dt>Jobs today</dt><dd>{runner?.jobsToday ?? 0}</dd></div>
               <div><dt>Auto-run</dt><dd>{runner?.autoRun ? "On" : "Off"}</dd></div>
             </dl>
-            <p>{runnerState === "busy" ? "The runner is processing a claimed assignment." : runnerState === "online" ? "The runner is ready to claim the next queued assignment." : runnerState === "stale" ? "The last heartbeat is over a minute old. Check the local runner process." : runnerState === "offline" ? "The bridge is authorized, but the local runner is offline. Start it to process queued work." : accessState === "denied" ? "This owner token was rejected. Replace it below and save again to unlock runner status." : ownerToken ? "Verifying the saved owner token. Replace it below if access stays locked." : "Save your owner token below to unlock runner status and the private queue."}</p>
-          </section>
-
-          <section className="panel owner-token-card">
-            <header><KeyRound size={16} /><div><p className="eyebrow">Private bridge access</p><h2>Owner token</h2></div></header>
-            <label>
-              <span className="sr-only">Research owner token</span>
-              <input type="password" value={tokenDraft} onChange={(event) => setTokenDraft(event.target.value)} placeholder="Paste owner token" autoComplete="off" />
-            </label>
-            <p>Stored only in localStorage on this browser and sent only as a bearer credential to the app API. It is never bundled into the site.</p>
-            <div>
-              <button className="button button--primary" type="button" onClick={saveToken} disabled={!tokenDraft.trim() && !ownerToken}><Save size={13} /> Save locally</button>
-              {ownerToken && <button className="button button--secondary" type="button" onClick={removeToken}><Trash2 size={13} /> Remove</button>}
-            </div>
-            {localDevelopment && <small><ShieldCheck size={12} /> Localhost development can connect without a token.</small>}
+            <p>{runnerState === "busy" ? "The runner is processing a claimed assignment." : runnerState === "online" ? "The runner is ready to claim the next queued assignment." : runnerState === "stale" ? "The last heartbeat is over a minute old. Check the local runner process." : runnerState === "offline" ? "The bridge is authorized, but the local runner is offline. Start it from Settings to process queued work." : accessState === "denied" ? "Owner access was rejected. Replace or remove it in Settings." : ownerToken ? "Verifying saved owner access. Manage it in Settings if access stays locked." : "Set up owner access in Settings to unlock runner status and the private queue."}</p>
+            <NavLink className="text-button runner-card__settings" to="/settings">Manage runner settings</NavLink>
           </section>
         </aside>
       </div>

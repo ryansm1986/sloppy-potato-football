@@ -30,29 +30,11 @@ const runner: RunnerStatus = {
   autoRun: true,
 };
 
-const runnerCredential = {
-  id: "credential-1",
-  deviceId: "install-1",
-  runnerId: "desktop-abc123",
-  name: "Kitchen desktop",
-  tokenHint: "spfr_1234...abcd",
-  metadata: { platform: "win32" },
-  active: true,
-  lastUsedAt: "2026-09-02T12:00:00.000Z",
-  revokedAt: null,
-  createdAt: "2026-09-01T12:00:00.000Z",
-  updatedAt: "2026-09-02T12:00:00.000Z",
-};
-
 function mockBridge(initialJobs: ResearchJob[] = [], runnerResponse = runner) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.startsWith("/api/rankings/snapshots")) return Response.json({ snapshots: [] });
     if (url === "/api/research/runner/status") return Response.json({ runner: runnerResponse });
-    if (url === `/api/research/runner-credentials/${runnerCredential.id}` && init?.method === "DELETE") {
-      return new Response(null, { status: 204 });
-    }
-    if (url === "/api/research/runner-credentials") return Response.json({ credentials: [runnerCredential] });
     if (url === "/api/research/schedules" && init?.method === "POST") {
       const body = JSON.parse(String(init.body));
       return Response.json({ schedule: {
@@ -90,8 +72,12 @@ describe("ResearchDeskPage", () => {
 
     expect(screen.getByRole("button", { name: /queue research/i })).toBeDisabled();
     expect(screen.getAllByText(/runner locked/i)).toHaveLength(1);
-    expect(screen.getByText(/Save your owner token below to unlock runner status/i)).toBeInTheDocument();
+    expect(screen.getByText(/Set up owner access in Settings to unlock runner status/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Manage runner settings/i })).toHaveAttribute("href", "/settings");
     expect(fetchMock).not.toHaveBeenCalledWith("/api/research/runner/status", expect.anything());
+    expect(screen.queryByRole("heading", { name: /Owner token/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /Connected Runners/i })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Desktop runner controls")).not.toBeInTheDocument();
   });
 
   it("prefills player research from a ranking-row link", () => {
@@ -99,17 +85,6 @@ describe("ResearchDeskPage", () => {
     render(<MemoryRouter initialEntries={["/research?subject=Malik%20Nabers"]}><ResearchDeskPage localDevelopmentOverride={false} /></MemoryRouter>);
 
     expect(screen.getByLabelText("Player name")).toHaveValue("Malik Nabers");
-  });
-
-  it("saves an owner token locally and begins verification", () => {
-    vi.stubGlobal("fetch", mockBridge());
-    render(<MemoryRouter><ResearchDeskPage localDevelopmentOverride={false} /></MemoryRouter>);
-
-    fireEvent.change(screen.getByLabelText("Research owner token"), { target: { value: "owner-secret" } });
-    fireEvent.click(screen.getByRole("button", { name: /save locally/i }));
-
-    expect(window.localStorage.getItem(RESEARCH_OWNER_TOKEN_KEY)).toBe("owner-secret");
-    expect(screen.getByText("Owner token saved only in this browser.")).toBeInTheDocument();
   });
 
   it.each([401, 403])("keeps the runner locked when the saved token is rejected with %s", async (status) => {
@@ -121,37 +96,10 @@ describe("ResearchDeskPage", () => {
     }));
     render(<MemoryRouter><ResearchDeskPage localDevelopmentOverride={false} /></MemoryRouter>);
 
-    expect(await screen.findByText(/This owner token was rejected/i)).toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Owner access was rejected/i);
     expect(screen.getAllByText(/runner locked/i)).toHaveLength(1);
     expect(screen.getByRole("button", { name: /queue research/i })).toBeDisabled();
     expect(screen.queryByText(/runner offline/i)).not.toBeInTheDocument();
-  });
-
-  it("unlocks after replacing a rejected token and locks again when it is removed", async () => {
-    window.localStorage.setItem(RESEARCH_OWNER_TOKEN_KEY, "wrong-secret");
-    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.startsWith("/api/rankings/snapshots")) return Response.json({ snapshots: [] });
-      const authorized = (init?.headers as Record<string, string> | undefined)?.Authorization === "Bearer owner-secret";
-      if (!authorized) return Response.json({ error: "Forbidden" }, { status: 403 });
-      if (url === "/api/research/runner/status") return Response.json({ runner: { ...runner, state: "online", currentJobId: null } });
-      if (url.startsWith("/api/research/jobs?")) return Response.json({ jobs: [] });
-      return Response.json({ error: "Unexpected request" }, { status: 404 });
-    }));
-    render(<MemoryRouter><ResearchDeskPage localDevelopmentOverride={false} /></MemoryRouter>);
-
-    expect(await screen.findByText(/This owner token was rejected/i)).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Research owner token"), { target: { value: "owner-secret" } });
-    fireEvent.click(screen.getByRole("button", { name: /save locally/i }));
-
-    expect(await screen.findByText("Runner online")).toBeInTheDocument();
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: /remove/i }));
-    expect(screen.getByText("Runner locked")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "locked" })).toBeInTheDocument();
-    expect(screen.getByText(/Save your owner token below to unlock runner status/i)).toBeInTheDocument();
-    expect(window.localStorage.getItem(RESEARCH_OWNER_TOKEN_KEY)).toBeNull();
   });
 
   it.each(["offline", "online"] as const)("shows an authorized %s runner", async (state) => {
@@ -305,31 +253,4 @@ describe("ResearchDeskPage", () => {
     expect(await screen.findByText("Research job returned to the queue.")).toBeInTheDocument();
   });
 
-  it("lists and revokes a device-specific runner credential with confirmation", async () => {
-    window.localStorage.setItem(RESEARCH_OWNER_TOKEN_KEY, "owner-secret");
-    const fetchMock = mockBridge();
-    vi.stubGlobal("fetch", fetchMock);
-    render(<MemoryRouter><ResearchDeskPage localDevelopmentOverride={false} /></MemoryRouter>);
-
-    expect(await screen.findByText("Kitchen desktop")).toBeInTheDocument();
-    expect(screen.getByText(/desktop-abc123/)).toBeInTheDocument();
-    expect(screen.getByText(/spfr_1234\.\.\.abcd/)).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Revoke Kitchen desktop" }));
-    expect(fetchMock).not.toHaveBeenCalledWith(
-      `/api/research/runner-credentials/${runnerCredential.id}`,
-      expect.objectContaining({ method: "DELETE" }),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Confirm revoke Kitchen desktop" }));
-
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
-      `/api/research/runner-credentials/${runnerCredential.id}`,
-      expect.objectContaining({
-        method: "DELETE",
-        headers: expect.objectContaining({ Authorization: "Bearer owner-secret" }),
-      }),
-    ));
-    expect(await screen.findByText(/Kitchen desktop was revoked/)).toBeInTheDocument();
-    expect(screen.getByText(/^Revoked ·/)).toBeInTheDocument();
-  });
 });

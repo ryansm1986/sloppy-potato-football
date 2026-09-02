@@ -9,6 +9,7 @@ import {
   Newspaper,
   RefreshCw,
   Search,
+  Settings,
   ShieldCheck,
   Sparkles,
   Telescope,
@@ -23,6 +24,7 @@ import { lineup, movers, news } from "./data";
 import DesktopUpdateControl from "./features/desktop/DesktopUpdateControl";
 import RankingsPage from "./features/rankings/RankingsPage";
 import ResearchDeskPage from "./features/research/ResearchDeskPage";
+import SettingsPage from "./features/settings/SettingsPage";
 import SleepersPage from "./features/sleepers/SleepersPage";
 
 type Icon = ComponentType<{ size?: number; strokeWidth?: number }>;
@@ -35,6 +37,7 @@ const navigation: Array<{ label: string; path: string; icon: Icon }> = [
   { label: "Sleepers", path: "/sleepers", icon: Telescope },
   { label: "Draft Board", path: "/draft", icon: ClipboardList },
   { label: "Research Desk", path: "/research", icon: Bot },
+  { label: "Settings", path: "/settings", icon: Settings },
 ];
 
 function PotatoMark() {
@@ -108,9 +111,9 @@ function MobileHeader() {
           <span>After Dark</span>
         </div>
       </div>
-      <button className="icon-button" aria-label="Sync league">
-        <RefreshCw size={17} />
-      </button>
+      <NavLink className="icon-button" aria-label="Open Settings" to="/settings">
+        <Settings size={17} />
+      </NavLink>
     </header>
   );
 }
@@ -131,6 +134,7 @@ function AppShell() {
           <Route path="draft" element={<ComingSoon title="Draft Board" icon={ClipboardList} />} />
           <Route path="research" element={<ResearchDeskPage />} />
           <Route path="research/schedules" element={<ResearchDeskPage />} />
+          <Route path="settings" element={<SettingsPage />} />
         </Routes>
       </main>
       <nav className="mobile-nav" aria-label="Mobile navigation">

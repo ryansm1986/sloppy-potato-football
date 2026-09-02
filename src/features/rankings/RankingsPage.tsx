@@ -988,7 +988,7 @@ export default function RankingsPage() {
     savePersonalRankings(window.localStorage, rankings);
     setSavedAt(new Date());
     if (!ownerToken) {
-      setAnnouncement("Saved your personal rankings on this device. Add owner access in Research Desk to sync them across devices.");
+      setAnnouncement("Saved your personal rankings on this device. Add owner access in Settings to sync them across devices.");
       return;
     }
     setCloudSaving(true);

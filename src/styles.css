@@ -875,6 +875,33 @@ tbody tr:hover { background: rgba(255, 255, 255, .015); }
 .runner-devices__empty p { margin: 0; font-size: var(--font-micro); line-height: 1.5; }
 .runner-devices__note { display: flex; align-items: flex-start; gap: 6px; margin: 0; padding: 10px 14px; color: var(--muted); font-size: var(--font-micro); line-height: 1.5; }
 .runner-devices__note svg { flex: 0 0 auto; color: var(--amber); }
+
+/* Settings */
+.settings-page { max-width: 1540px; }
+.settings-layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; align-items: start; }
+.settings-main, .settings-side { display: grid; gap: 16px; }
+.settings-page h2 { margin: 0; font-family: "Anton", sans-serif; font-size: 19px; font-weight: 400; letter-spacing: .025em; text-transform: uppercase; }
+.settings-notice { margin: -10px 0 16px; }
+.settings-access-card { padding: 18px; border-color: rgba(245, 158, 11, .26); background: linear-gradient(145deg, #18150e, #141518 62%); }
+.settings-access-card > header { margin-bottom: 14px; }
+.settings-access-card > label { max-width: 680px; display: grid; gap: 7px; }
+.settings-access-card > label > span { color: var(--text); font-size: var(--font-caption); font-weight: 800; letter-spacing: .04em; }
+.settings-access-state { max-width: 680px; align-items: flex-start; margin-bottom: 14px; padding: 11px 12px; border: 1px solid var(--border-soft); border-radius: 6px; background: rgba(255, 255, 255, .018); }
+.settings-access-state > svg { flex: 0 0 auto; margin-top: 2px; color: var(--amber); }
+.settings-access-state > div { display: grid; gap: 3px; }
+.settings-access-state strong { font-size: var(--font-small); }
+.settings-access-state span { color: var(--muted); font-size: var(--font-caption); line-height: 1.5; }
+.settings-access-state.is-authorized { border-color: rgba(72, 199, 142, .22); background: rgba(72, 199, 142, .045); }
+.settings-access-state.is-authorized > svg { color: var(--green); }
+.settings-desktop-empty, .settings-help-card { display: flex; align-items: flex-start; gap: 12px; padding: 17px; }
+.settings-desktop-empty > svg, .settings-help-card > svg { flex: 0 0 auto; color: var(--amber); }
+.settings-desktop-empty p:last-child, .settings-help-card p:last-child { max-width: 68ch; margin: 7px 0 0; color: var(--muted); font-size: var(--font-caption); line-height: 1.55; }
+.settings-page .desktop-runner-controls > header { padding: 16px 18px; }
+.settings-page .desktop-token-setup, .settings-page .desktop-runner-actions { padding: 16px 18px; }
+.settings-page .desktop-settings { padding: 14px 18px; }
+.settings-page .desktop-settings label { font-size: var(--font-caption); }
+.runner-card__settings { display: inline-flex; margin-top: 11px; color: var(--amber); text-decoration: none; }
+.research-submit-row a, .queue-empty a { color: var(--amber); }
 .spin { animation: spin 900ms linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -1086,6 +1113,8 @@ td,
   .sleepers-layout { grid-template-columns: minmax(0, 1fr) 280px; }
   .research-layout { grid-template-columns: 1fr; }
   .research-side { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .settings-layout { grid-template-columns: 1fr; }
+  .settings-side { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 1000px) {
@@ -1120,6 +1149,7 @@ td,
   .mobile-brand strong { font-family: "Anton", sans-serif; font-size: 15px; font-weight: 400; letter-spacing: .06em; }
   .mobile-brand span { color: var(--amber); font-size: var(--font-micro); font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
   .icon-button { width: 34px; height: 34px; display: grid; place-items: center; color: var(--muted); border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+  .icon-button.is-active { color: var(--amber); border-color: rgba(245, 158, 11, .4); }
   .mobile-nav {
     position: fixed;
     inset: auto 0 0;
@@ -1211,6 +1241,7 @@ td,
   .confirmation-bar { bottom: 76px; align-items: stretch; flex-direction: column; }
   .confirmation-bar > div:last-child { justify-content: flex-end; }
   .research-side { grid-template-columns: 1fr; }
+  .settings-side { grid-template-columns: 1fr; }
   .research-job-types { grid-template-columns: 1fr; }
   .schedule-composer { grid-template-columns: 1fr; }
   .schedule-days, .schedule-composer > small { grid-column: 1; }
@@ -1239,9 +1270,11 @@ td,
   .huddle-page { max-width: 2160px; }
   .rankings-page { max-width: 2320px; }
   .research-page { max-width: 2080px; }
+  .settings-page { max-width: 1720px; }
   .sleepers-page { max-width: 2240px; }
   .dashboard-grid { grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; }
   .research-layout { grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; }
+  .settings-layout { grid-template-columns: minmax(680px, 1fr) minmax(380px, 460px); gap: 18px; }
   .sleepers-layout { grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; }
 }
 
