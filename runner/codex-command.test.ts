@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { resolve, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { resolveCodexInvocation } from "./codex-command.js";
@@ -42,7 +42,7 @@ describe("Codex command resolution", () => {
 
   it("invokes the native Windows Codex binary directly so no console window is created", () => {
     const appData = "C:\\Users\\owner\\AppData\\Roaming";
-    const expected = resolve(
+    const expected = win32.join(
       appData,
       "npm/node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe",
     );
@@ -56,7 +56,7 @@ describe("Codex command resolution", () => {
 
   it("resolves the native Windows ARM64 Codex binary", () => {
     const appData = "C:\\Users\\owner\\AppData\\Roaming";
-    const expected = resolve(
+    const expected = win32.join(
       appData,
       "npm/node_modules/@openai/codex/node_modules/@openai/codex-win32-arm64/vendor/aarch64-pc-windows-msvc/bin/codex.exe",
     );

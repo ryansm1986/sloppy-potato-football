@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, resolve, win32 } from "node:path";
 
 export type CodexInvocation = {
   command: string;
@@ -17,8 +17,8 @@ function resolveWindowsNativeCodex(
     ? { packageName: "codex-win32-arm64", triple: "aarch64-pc-windows-msvc" }
     : { packageName: "codex-win32-x64", triple: "x86_64-pc-windows-msvc" };
   const candidates = [
-    join(packageRoot, "node_modules", "@openai", target.packageName, "vendor", target.triple, "bin", "codex.exe"),
-    join(packageRoot, "vendor", target.triple, "bin", "codex.exe"),
+    win32.join(packageRoot, "node_modules", "@openai", target.packageName, "vendor", target.triple, "bin", "codex.exe"),
+    win32.join(packageRoot, "vendor", target.triple, "bin", "codex.exe"),
   ];
   return candidates.find(fileExists);
 }
@@ -43,7 +43,7 @@ export function resolveCodexInvocation(
   }
 
   if (platform === "win32" && environment.APPDATA) {
-    const packageRoot = join(environment.APPDATA, "npm", "node_modules", "@openai", "codex");
+    const packageRoot = win32.join(environment.APPDATA, "npm", "node_modules", "@openai", "codex");
     const nativeCommand = resolveWindowsNativeCodex(packageRoot, architecture, fileExists);
     if (nativeCommand) return { command: nativeCommand, prefixArgs: [] };
     return { command: "codex.exe", prefixArgs: [] };
