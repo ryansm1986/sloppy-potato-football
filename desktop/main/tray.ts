@@ -1,8 +1,9 @@
-import { Menu, Tray, nativeImage, type MenuItemConstructorOptions } from "electron";
+import path from "node:path";
+import { app, Menu, Tray, nativeImage, type MenuItemConstructorOptions } from "electron";
 import type { DesktopSettings, RunnerStatus } from "../shared/contracts.js";
 import { getTrayPresentation } from "./tray-model.js";
 
-// A tiny embedded PNG keeps the shell functional before branded installer assets land.
+// A tiny embedded PNG keeps the shell functional if a development asset is missing.
 const FALLBACK_ICON =
   "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAIUlEQVR42mP8z8Dwn4ECwESJ5lEDRg0YNYChYwYGBoYBAF8HAxV7h8WAAAAAAElFTkSuQmCC";
 
@@ -24,7 +25,13 @@ export class DesktopTray {
 
   constructor(settings: DesktopSettings, private readonly actions: TrayActions) {
     this.settings = settings;
-    const image = nativeImage.createFromBuffer(Buffer.from(FALLBACK_ICON, "base64")).resize({
+    const brandedImage = nativeImage.createFromPath(
+      path.join(app.getAppPath(), "dist-desktop", "sloppy-potato-icon.png"),
+    );
+    const sourceImage = brandedImage.isEmpty()
+      ? nativeImage.createFromBuffer(Buffer.from(FALLBACK_ICON, "base64"))
+      : brandedImage;
+    const image = sourceImage.resize({
       width: 16,
       height: 16,
     });

@@ -85,6 +85,7 @@
       "output": "release-desktop"
     },
     "win": {
+      "icon": "desktop/assets/sloppy-potato-icon.png",
       "target": [
         "nsis",
         "portable"

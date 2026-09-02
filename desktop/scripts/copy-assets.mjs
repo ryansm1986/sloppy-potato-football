@@ -7,3 +7,7 @@ await copyFile(
   path.resolve("runner", "schemas", "research-result.schema.json"),
   path.join(destination, "research-result.schema.json"),
 );
+await copyFile(
+  path.resolve("desktop", "assets", "sloppy-potato-icon.png"),
+  path.resolve("dist-desktop", "sloppy-potato-icon.png"),
+);

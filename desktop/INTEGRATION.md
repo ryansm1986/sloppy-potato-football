@@ -37,6 +37,7 @@ Add the following top-level package metadata to `package.json`:
       "output": "release-desktop"
     },
     "win": {
+      "icon": "desktop/assets/sloppy-potato-icon.png",
       "target": ["nsis", "portable"]
     },
     "nsis": {
@@ -51,7 +52,7 @@ Add the following top-level package metadata to `package.json`:
 
 `electron-builder` merges `files` into the application ASAR. The Cloudflare Vite build's client output must remain at `dist/client/`; absolute `/assets/*` links work because `potato://app` is registered as a standard secure scheme. Add `dist-desktop/` and `release-desktop/` to `.gitignore`.
 
-For a branded release, add a multi-resolution `desktop/assets/icon.ico` and set `build.win.icon` to that path. Until then the runtime tray uses the embedded fallback icon.
+The generated potato-football mark at `desktop/assets/sloppy-potato-icon.png` is used for the packaged executable and copied into `dist-desktop/` for the runtime tray. The tray retains a tiny embedded fallback so a missing development asset cannot prevent startup.
 
 ## Runner service hookup
 
