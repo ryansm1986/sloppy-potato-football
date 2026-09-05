@@ -216,6 +216,7 @@ describe("SleepersPage", () => {
     expect(screen.getByRole("checkbox", { name: /Scout new publishers/i })).toBeChecked();
     fireEvent.change(screen.getByLabelText("League size"), { target: { value: "14" } });
     fireEvent.change(screen.getByLabelText("Sleepers per position"), { target: { value: "10" } });
+    fireEvent.change(screen.getByLabelText("Source target"), { target: { value: "9" } });
     fireEvent.click(screen.getByRole("button", { name: /Research sleepers/i }));
 
     expect(await screen.findByText(/Sleeper research queued/i)).toBeInTheDocument();
@@ -227,6 +228,7 @@ describe("SleepersPage", () => {
       rankingType: "redraft",
       leagueSize: 14,
       sleepersPerPosition: 10,
+      sourceTarget: 9,
       discoverNewSources: true,
     });
     await waitFor(() => expect(screen.getByRole("button", { name: /Research sleepers/i })).toBeEnabled());

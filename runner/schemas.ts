@@ -146,9 +146,9 @@ export const researchResultSchema = z.object({
   }).strict()).max(100),
   rankingSnapshot: rankingSnapshotSchema.nullable(),
   // A general rankings job returns the published boards separately so the app can
-  // preserve source provenance and calculate its own aggregate. Three to five
+  // preserve source provenance and calculate its own aggregate. Three to ten
   // sources bounds both research cost and result size.
-  rankingSnapshots: z.array(sourcedRankingSnapshotSchema).min(3).max(5).nullable().optional(),
+  rankingSnapshots: z.array(sourcedRankingSnapshotSchema).min(3).max(10).nullable().optional(),
   sleeperReport: sleeperReportSchema.nullable().optional(),
 }).strict().superRefine((result, context) => {
   const snapshots = [

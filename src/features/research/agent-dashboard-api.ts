@@ -4,7 +4,7 @@ export type AgentResearchSettings = {
   focus: "balanced" | "injuries" | "usage" | "draft_value";
   detail: "concise" | "standard" | "thorough";
   recencyDays: 7 | 30 | 90;
-  sourceTarget: 3 | 4 | 5;
+  sourceTarget: number;
 };
 export const DEFAULT_AGENT_SETTINGS: AgentResearchSettings = { focus: "balanced", detail: "standard", recencyDays: 30, sourceTarget: 3 };
 export type AgentJob = ResearchJob & {

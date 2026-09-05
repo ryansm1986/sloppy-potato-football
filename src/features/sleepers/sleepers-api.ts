@@ -74,6 +74,7 @@ export function requestSleeperResearch(
   leagueSize: number,
   sleepersPerPosition: number,
   discoverNewSources: boolean,
+  sourceTarget?: number,
 ): Promise<ResearchJob> {
   return createResearchJob(token, {
     type: "sleepers_research",
@@ -82,5 +83,6 @@ export function requestSleeperResearch(
     leagueSize,
     sleepersPerPosition,
     discoverNewSources,
+    ...(sourceTarget !== undefined ? { sourceTarget } : {}),
   });
 }

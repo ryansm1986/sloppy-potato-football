@@ -44,6 +44,7 @@ export const createResearchJobInput = z.object({
   season: z.string().regex(/^20\d{2}$/).optional(),
   week: z.number().int().min(1).max(25).optional(),
   rankingLimit: z.number().int().min(1).max(500).optional(),
+  sourceTarget: z.number().int().min(3).max(10).optional(),
   leagueSize: rankingLeagueSize.optional().default(12),
   sleepersPerPosition: z.number().int().min(1).max(20).optional(),
   discoverNewSources: z.boolean().optional().default(false),
@@ -63,6 +64,7 @@ export const createResearchJobInput = z.object({
   }
 }).transform((value) => ({
   ...value,
+  sourceTarget: value.type === "source_refresh" ? undefined : value.sourceTarget,
   rankingLimit: value.type === "source_refresh" || value.type === "rankings_research"
     ? value.rankingLimit ?? 100
     : undefined,
@@ -113,7 +115,7 @@ const sourcedRankingSnapshotInput = z.object({
   sourceUrl: httpSourceUrl,
 }).passthrough();
 
-const multiSourceRankingInput = z.array(sourcedRankingSnapshotInput).min(3).max(5).superRefine((snapshots, context) => {
+const multiSourceRankingInput = z.array(sourcedRankingSnapshotInput).min(3).max(10).superRefine((snapshots, context) => {
   const names = snapshots.map((snapshot) => snapshot.sourceName.trim().toLowerCase());
   const hosts = snapshots.map((snapshot) => canonicalSourceDomain(snapshot.sourceUrl));
   if (new Set(names).size !== names.length || new Set(hosts).size !== hosts.length) {
@@ -235,6 +237,7 @@ export function toPublicJob(row: ResearchJobRow) {
     errorCode: row.error_code,
     runnerId: row.leased_by_runner_id,
     researchSettings: input.researchSettings ?? null,
+    sourceTarget: row.job_type === "source_refresh" ? null : input.researchSettings?.sourceTarget ?? input.sourceTarget ?? null,
     result: parseJson(row.result_json, null),
     rankingSnapshotId: row.ranking_snapshot_id,
   };
@@ -258,7 +261,7 @@ function baseExecutionContext(row: ResearchJobRow) {
 
 function executionContext(row: ResearchJobRow) {
   const input = parseJson<ResearchTaskInput>(row.task_input_json, {} as never);
-  const preferences = researchSettingsInstructions(input.researchSettings ?? defaultResearchSettings);
+  const preferences = researchSettingsInstructions(input.researchSettings ?? defaultResearchSettings, row.job_type === "source_refresh");
   let base = baseExecutionContext(row);
   // Legacy runners bound this field to 2,000 characters. Preserve preferences
   // even when source discovery carries a large historical domain list.
@@ -275,7 +278,7 @@ function legacyCompatibleClaimInput(row: ResearchJobRow) {
   const input = parseJson<ResearchTaskInput>(row.task_input_json, {} as never);
   // Older desktop runners use a strict input schema. Preferences travel through
   // executionContext so they can honor new settings without a forced update.
-  const { researchSettings: _researchSettings, ...legacyInput } = input;
+  const { researchSettings: _researchSettings, sourceTarget: _sourceTarget, ...legacyInput } = input;
   return { ...legacyInput, leagueSize: input.leagueSize ?? 12 };
 }
 
@@ -326,7 +329,15 @@ export async function createResearchJob(
         ? { ...input, knownSourceDomains: await snapshotKnownRankingSourceDomains(db) }
         : input
     : input;
-  const taskInput = { ...sourceInput, researchSettings: await getResearchSettings(db, ownerIdentity) };
+  const savedSettings = await getResearchSettings(db, ownerIdentity);
+  const taskInput = {
+    ...sourceInput,
+    sourceTarget: input.type === "source_refresh" ? undefined : input.sourceTarget,
+    researchSettings: {
+      ...savedSettings,
+      sourceTarget: input.type === "source_refresh" ? savedSettings.sourceTarget : input.sourceTarget ?? savedSettings.sourceTarget,
+    },
+  };
   try {
     await db.$client.batch([
       db.$client.prepare(

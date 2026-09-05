@@ -32,6 +32,7 @@ export type ResearchJob = {
   rankingType: string;
   position: string | null;
   rankingLimit?: number | null;
+  sourceTarget?: number | null;
   leagueSize?: number;
   createdAt: string;
   updatedAt: string;
@@ -73,6 +74,7 @@ export type CreateResearchJob = {
   rankingType: "redraft";
   position?: "ALL" | "QB" | "RB" | "WR" | "TE";
   rankingLimit?: number;
+  sourceTarget?: number;
   leagueSize?: number;
   sleepersPerPosition?: number;
   discoverNewSources?: boolean;

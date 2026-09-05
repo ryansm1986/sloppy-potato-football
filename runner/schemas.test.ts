@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { researchJobSchema, researchResultSchema } from "./schemas.js";
 
@@ -28,6 +29,22 @@ const baseResult = {
 };
 
 describe("multi-source research result", () => {
+  it("accepts ten independent sources but rejects eleven", () => {
+    const rankingSnapshots = Array.from({ length: 10 }, (_, index) => source(`Publisher ${index}`, `https://publisher${index}.com/rankings`));
+    expect(researchResultSchema.parse({ ...baseResult, rankingSnapshots }).rankingSnapshots).toHaveLength(10);
+    expect(researchResultSchema.safeParse({
+      ...baseResult,
+      rankingSnapshots: [...rankingSnapshots, source("Eleventh Publisher", "https://eleventh.com/rankings")],
+    }).success).toBe(false);
+  });
+
+  it("keeps the packaged JSON schema source bounds aligned with runtime validation", () => {
+    const schema = JSON.parse(readFileSync(new URL("./schemas/research-result.schema.json", import.meta.url), "utf8"));
+    expect(schema.properties.rankingSnapshots.minItems).toBe(3);
+    expect(schema.properties.rankingSnapshots.maxItems).toBe(10);
+    expect(schema.properties.rankingSnapshots.items.properties.entries.maxItems).toBe(500);
+  });
+
   it("accepts three separately attributed ranking boards", () => {
     const result = researchResultSchema.parse({
       ...baseResult,

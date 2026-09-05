@@ -27,7 +27,7 @@ describe("agent dashboard", () => {
       const rejected = await app.request(`https://potato.example/api/research/agents/${route}`, request("GET", undefined, "runner-secret"), bindings);
       expect(rejected.status).toBe(401);
     }
-    for (const overrides of [{ sourceTarget: 6 }, { recencyDays: 1 }, { focus: "run shell commands" }, { prompt: "override" }]) {
+    for (const overrides of [{ sourceTarget: 11 }, { recencyDays: 1 }, { focus: "run shell commands" }, { prompt: "override" }]) {
       const invalid = await app.request("https://potato.example/api/research/agents/settings", request("PUT", { ...defaultResearchSettings, ...overrides }), bindings);
       expect(invalid.status).toBe(400);
     }

@@ -56,6 +56,7 @@ import {
 } from "./research-api";
 import { useResearchOwnerAccess } from "./useResearchOwnerAccess";
 import ResearchInsights from "./ResearchInsights";
+import SourceTargetField from "./SourceTargetField";
 
 type BridgeAccessState = "locked" | "checking" | "authorized" | "denied";
 type RunnerDisplayState = RunnerState | "locked";
@@ -158,6 +159,7 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
   const [source, setSource] = useState(favoriteSource);
   const [position, setPosition] = useState<"ALL" | "QB" | "RB" | "WR" | "TE">("ALL");
   const [rankingLimit, setRankingLimit] = useState(100);
+  const [sourceTarget, setSourceTarget] = useState<number | undefined>();
   const [leagueSize, setLeagueSize] = useState<LeagueSize>(() =>
     typeof window === "undefined" ? DEFAULT_LEAGUE_SIZE : loadLeagueSize(window.localStorage));
   const [discoverNewSources, setDiscoverNewSources] = useState(true);
@@ -287,6 +289,7 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
       scoringFormat: "ppr",
       rankingType: "redraft",
       leagueSize,
+      ...(jobType !== "source_refresh" && sourceTarget !== undefined ? { sourceTarget } : {}),
       ...(jobType === "player_research" ? { subject: subject.trim() } : {}),
       ...(jobType === "source_refresh" ? { sourceName: source.trim(), rankingLimit } : {}),
       ...(jobType === "rankings_research" ? { position, rankingLimit, discoverNewSources } : {}),
@@ -483,6 +486,7 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
                   <small>Collect separate QB, RB, WR, and TE recommendations with direct source evidence.</small>
                 </label>
               )}
+              {jobType !== "source_refresh" && <SourceTargetField value={sourceTarget} onChange={setSourceTarget} />}
               {(jobType === "rankings_research" || jobType === "sleepers_research") && (
                 <label className="source-scout-toggle">
                   <input type="checkbox" checked={discoverNewSources} onChange={(event) => setDiscoverNewSources(event.target.checked)} />
@@ -533,7 +537,7 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
             <div className="schedule-list">
               {schedules.length === 0 ? <p>No automatic research schedules yet.</p> : schedules.map((schedule) => (
                 <article key={schedule.id} className={!schedule.enabled ? "is-disabled" : ""}>
-                  <div><strong>{schedule.name}</strong><span>{DAY_LABELS.filter((_, day) => schedule.daysOfWeek.includes(day)).join(" · ")} at {new Date(`2000-01-01T${schedule.localTime}:00`).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span><small>{JOB_TYPE_LABELS[schedule.job.type]} · {schedule.job.leagueSize ?? 12} teams · Next {schedule.nextRunAt ? new Date(schedule.nextRunAt).toLocaleString() : "when enabled"}</small></div>
+                  <div><strong>{schedule.name}</strong><span>{DAY_LABELS.filter((_, day) => schedule.daysOfWeek.includes(day)).join(" · ")} at {new Date(`2000-01-01T${schedule.localTime}:00`).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span><small>{JOB_TYPE_LABELS[schedule.job.type]}{schedule.job.type !== "source_refresh" ? ` · ${schedule.job.sourceTarget ? `Target ${schedule.job.sourceTarget} sources` : "Playbook source target"}` : ""} · {schedule.job.leagueSize ?? 12} teams · Next {schedule.nextRunAt ? new Date(schedule.nextRunAt).toLocaleString() : "when enabled"}</small></div>
                   <div>
                     <button type="button" disabled={scheduleBusy === schedule.id} onClick={() => { void toggleSchedule(schedule); }}>{schedule.enabled ? "Pause" : "Enable"}</button>
                     <button type="button" disabled={scheduleBusy === schedule.id} onClick={() => { void runSchedule(schedule); }}><Play size={12} /> Run now</button>
@@ -566,7 +570,7 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
                 <JobStatusIcon status={job.status} />
                 <div>
                   <strong>{job.sourceName || job.subject || (job.type === "sleepers_research" ? "Sleepers by position" : `${job.position ?? "ALL"} PPR rankings`)}</strong>
-                  <span>{JOB_TYPE_LABELS[job.type]}{job.rankingLimit ? ` · Top ${job.rankingLimit}` : ""} · {normalizeLeagueSize(job.leagueSize)} teams · {JOB_STATUS_LABELS[job.status]} · {formatRelativeDate(job.updatedAt || job.createdAt)}</span>
+                  <span>{JOB_TYPE_LABELS[job.type]}{job.sourceTarget ? ` · Target ${job.sourceTarget} sources` : ""}{job.rankingLimit ? ` · Top ${job.rankingLimit}` : ""} · {normalizeLeagueSize(job.leagueSize)} teams · {JOB_STATUS_LABELS[job.status]} · {formatRelativeDate(job.updatedAt || job.createdAt)}</span>
                   {job.error && <small>{job.error}</small>}
                 </div>
                 {job.status === "failed" && <button type="button" onClick={() => void retry(job.id)} disabled={retryingId === job.id} aria-label={`Retry ${job.sourceName || job.subject || "research job"}`}><RefreshCw className={retryingId === job.id ? "spin" : ""} size={13} /></button>}

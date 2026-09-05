@@ -48,14 +48,14 @@ describe("AgentDashboardPage", () => {
     render(<MemoryRouter><AgentDashboardPage localDevelopmentOverride /></MemoryRouter>);
     const focus = await screen.findByLabelText("Research focus");
     fireEvent.change(focus, { target: { value: "usage" } });
-    fireEvent.change(screen.getByLabelText("Independent source target"), { target: { value: "5" } });
+    fireEvent.change(screen.getByLabelText("Independent source target"), { target: { value: "10" } });
     fireEvent.click(screen.getByRole("button", { name: "Refresh activity" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Refresh activity" })).toBeEnabled());
     expect(focus).toHaveValue("usage");
     fireEvent.click(screen.getByRole("button", { name: "Save playbook" }));
     await screen.findByText(/Research settings saved/);
     const call = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT");
-    expect(JSON.parse(String(call?.[1]?.body))).toEqual({ ...DEFAULT_AGENT_SETTINGS, focus: "usage", sourceTarget: 5 });
+    expect(JSON.parse(String(call?.[1]?.body))).toEqual({ ...DEFAULT_AGENT_SETTINGS, focus: "usage", sourceTarget: 10 });
     expect(screen.getByRole("button", { name: "Save playbook" })).toBeDisabled();
   });
 

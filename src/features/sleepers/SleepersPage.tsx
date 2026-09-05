@@ -17,6 +17,7 @@ import {
 import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { ResearchRunHistory, type ResearchRunOption } from "../rankings/ResearchRunHistory";
+import SourceTargetField from "../research/SourceTargetField";
 import { LEAGUE_SIZE_OPTIONS, loadLeagueSize, normalizeLeagueSize, saveLeagueSize } from "../league-size";
 import {
   isLocalDevelopment,
@@ -157,6 +158,7 @@ export default function SleepersPage({ localDevelopmentOverride }: { localDevelo
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [sleepersPerPosition, setSleepersPerPosition] = useState(8);
+  const [sourceTarget, setSourceTarget] = useState<number | undefined>();
   const [discoverNewSources, setDiscoverNewSources] = useState(true);
   const [pollBaseline, setPollBaseline] = useState<{ id: string | null; generatedAt: number } | null>(null);
   const tabRefs = useRef<Partial<Record<SleeperPosition, HTMLButtonElement | null>>>({});
@@ -273,7 +275,7 @@ export default function SleepersPage({ localDevelopmentOverride }: { localDevelo
     setIsSubmitting(true);
     setNotice(null);
     try {
-      await requestSleeperResearch(ownerToken, leagueSize, sleepersPerPosition, discoverNewSources);
+      await requestSleeperResearch(ownerToken, leagueSize, sleepersPerPosition, discoverNewSources, sourceTarget);
       setNotice("Sleeper research queued. Results will publish here when your runner finishes.");
       setPollBaseline({
         id: latestReport?.id ?? null,
@@ -380,6 +382,7 @@ export default function SleepersPage({ localDevelopmentOverride }: { localDevelo
               }}>{LEAGUE_SIZE_OPTIONS.map((size) => <option value={size} key={size}>{size} teams</option>)}</select></label>
               <label><span>Per position</span><select aria-label="Sleepers per position" value={sleepersPerPosition} onChange={(event) => setSleepersPerPosition(Number(event.target.value))}><option value={5}>5 players</option><option value={8}>8 players</option><option value={10}>10 players</option><option value={12}>12 players</option></select></label>
             </div>
+            <SourceTargetField value={sourceTarget} onChange={setSourceTarget} />
             <label className="sleeper-scout-toggle">
               <input type="checkbox" checked={discoverNewSources} onChange={(event) => setDiscoverNewSources(event.target.checked)} />
               <span className="sleeper-scout-toggle__control" aria-hidden="true"><i /></span>

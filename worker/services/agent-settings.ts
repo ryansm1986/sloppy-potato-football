@@ -8,7 +8,7 @@ export const researchSettingsInput = z.object({
   focus: z.enum(["balanced", "injuries", "usage", "draft_value"]),
   detail: z.enum(["concise", "standard", "thorough"]),
   recencyDays: z.union([z.literal(7), z.literal(30), z.literal(90)]),
-  sourceTarget: z.union([z.literal(3), z.literal(4), z.literal(5)]),
+  sourceTarget: z.number().int().min(3).max(10),
 }).strict();
 
 export type ResearchSettings = z.infer<typeof researchSettingsInput>;
@@ -33,7 +33,7 @@ export async function saveResearchSettings(db: Database, settings: ResearchSetti
   return validated;
 }
 
-export function researchSettingsInstructions(settings: ResearchSettings) {
+export function researchSettingsInstructions(settings: ResearchSettings, namedSourceOnly = false) {
   const focus = {
     balanced: "Balance current role, news, risk, and fantasy value",
     injuries: "Emphasize injury status, recovery evidence, and availability risk",
@@ -45,5 +45,8 @@ export function researchSettingsInstructions(settings: ResearchSettings) {
     standard: "Give a clear summary with supporting evidence and actionable findings",
     thorough: "Explain supporting evidence, conflicting reports, uncertainty, and actionable implications thoroughly",
   }[settings.detail];
-  return ` Research preferences: ${focus}. ${detail}; narrative detail must not reduce requested ranking or sleeper coverage. Prefer evidence published in the last ${settings.recencyDays} days; label older evidence and never invent publication dates. Target ${settings.sourceTarget} independent reputable publishers for general research when verifiable evidence exists; retain the named publisher for a source refresh. Never fabricate evidence to meet a source target. Stay within the required result schema and output limits.`;
+  const sourceInstructions = namedSourceOnly
+    ? "Refresh only the named publisher; do not expand this assignment to other publishers."
+    : `Target ${settings.sourceTarget} independent reputable publishers for this research; if fewer can be verified, report the shortfall honestly. Never fabricate evidence to meet a source target.`;
+  return ` Research preferences: ${focus}. ${detail}; narrative detail must not reduce requested ranking or sleeper coverage. Prefer evidence published in the last ${settings.recencyDays} days; label older evidence and never invent publication dates. ${sourceInstructions} Stay within the required result schema and output limits.`;
 }

@@ -19,9 +19,11 @@ export function buildResearchPrompt(job: ResearchJob): string {
     "Use reputable primary reporting and clearly attributed fantasy analysis. Do not bypass paywalls. Do not invent injuries, rankings, dates, or citations.",
     "Material factual claims must have citations. State insufficient evidence in the summary when the available evidence does not support a responsible conclusion.",
     "Return only the JSON object required by the supplied output schema. All nullable properties must be present and set to null when unavailable.",
+    "For large boards, use compact JSON and concise optional insights to stay within the 1,000,000-byte output limit. Never omit required properties or fabricate entries to fit; report any coverage shortfall honestly.",
     "Every citation URL referenced by an insight must also appear in citations. Return empty arrays when there are no citations or insights.",
     "For source_refresh, return the named publisher's board in rankingSnapshot and set rankingSnapshots and sleeperReport to null. For player_research, set rankingSnapshot, rankingSnapshots, and sleeperReport to null.",
-    "For rankings_research, set rankingSnapshot and sleeperReport to null and return 3 to 5 separately attributed published boards in rankingSnapshots. Use at least 3 distinct reputable publishers with distinct domains; never present a synthetic agent ranking as a source.",
+    "For rankings_research, set rankingSnapshot and sleeperReport to null and return 3 to 10 separately attributed published boards in rankingSnapshots. Use at least 3 distinct reputable publishers with distinct domains; never present a synthetic agent ranking as a source.",
+    "For rankings_research and sleepers_research, aim for the server-validated source target in Task (default 3). Count independent publisher domains across the whole report, not per player or position. The target is an aim, not permission to invent evidence: return fewer if unavailable, explain the shortfall in the summary, and keep the minimum-three rule for ranking boards.",
     "Preserve each publisher's own player order exactly, use its direct rankings page URL, and do not merge sources. The app computes the aggregate after ingestion.",
     "If the requested position is ALL, each source must be an overall/flex-style board spanning multiple positions with one contiguous cross-position rank order. ALL never means a quarterback-only list or separate per-position rank sequences.",
     "Every returned ranking board must use ranks that are unique and contiguous from 1. If fewer than 3 qualifying published sources can be verified, return no ranking boards and explain the insufficient evidence rather than fabricating data.",
@@ -42,18 +44,28 @@ export function buildResearchPrompt(job: ResearchJob): string {
     ...(job.type === "sleepers_research" ? [
       `Sleeper settings: ${input.leagueSize ?? 12}-team league; up to ${input.sleepersPerPosition ?? 8} candidates per position.`,
       `Sleeper source discovery: ${input.discoverNewSources ? "enabled" : "disabled"}.`,
-      ...(input.discoverNewSources ? [
-        `Previously used canonical publisher domains (server snapshot): ${(input.knownSourceDomains ?? []).join(", ") || "none"}.`,
-      ] : []),
     ] : []),
     ...(job.type === "rankings_research" ? [
       `Ranking source discovery: ${input.discoverNewSources ? "enabled" : "disabled"}.`,
-      ...(input.discoverNewSources ? [
-        `Previously used canonical ranking publisher domains (server snapshot): ${(input.knownSourceDomains ?? []).join(", ") || "none"}.`,
-      ] : []),
     ] : []),
     ...(rankingRequest ? [rankingRequest] : []),
-    "END SERVER-VALIDATED ASSIGNMENT DATA",
   ];
-  return lines.join("\n").slice(0, 8_000);
+  const end = "END SERVER-VALIDATED ASSIGNMENT DATA";
+  // Reserve all validated task/count/scope fields and the closing marker before
+  // fitting the optional domain snapshot. Never cut a domain in half.
+  if (input.discoverNewSources && (job.type === "rankings_research" || job.type === "sleepers_research")) {
+    const domains = input.knownSourceDomains ?? [];
+    const included: string[] = [];
+    const label = `Previously used canonical ${job.type === "rankings_research" ? "ranking " : ""}publisher domains (server snapshot)`;
+    const domainLine = () => `${label}: ${included.join(", ") || (domains.length ? "see Task" : "none")}.${included.length < domains.length ? " Partial snapshot; other known publishers may be omitted." : ""}`;
+    for (const domain of domains) {
+      included.push(domain);
+      if ([...lines, domainLine(), end].join("\n").length > 8_000) {
+        included.pop();
+        break;
+      }
+    }
+    if ([...lines, domainLine(), end].join("\n").length <= 8_000) lines.push(domainLine());
+  }
+  return [...lines, end].join("\n").slice(0, 8_000);
 }

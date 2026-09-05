@@ -152,6 +152,7 @@ describe("ResearchDeskPage", () => {
     const limit = screen.getByLabelText("Number of players");
     expect(limit).toHaveValue(100);
     fireEvent.change(limit, { target: { value: "500" } });
+    fireEvent.change(screen.getByLabelText("Source target"), { target: { value: "8" } });
     await waitFor(() => expect(screen.getByRole("button", { name: /queue research/i })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: /queue research/i }));
 
@@ -160,6 +161,7 @@ describe("ResearchDeskPage", () => {
       type: "rankings_research",
       position: "ALL",
       rankingLimit: 500,
+      sourceTarget: 8,
       discoverNewSources: true,
     });
 
@@ -176,6 +178,7 @@ describe("ResearchDeskPage", () => {
     fireEvent.click(screen.getByLabelText("Rankings research"));
     fireEvent.change(screen.getByLabelText("Number of players"), { target: { value: "250" } });
     fireEvent.change(screen.getByLabelText("Schedule name"), { target: { value: "Monday rankings" } });
+    fireEvent.change(screen.getByLabelText("Source target"), { target: { value: "10" } });
     await waitFor(() => expect(screen.getByRole("button", { name: /schedule current assignment/i })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: /schedule current assignment/i }));
 
@@ -188,10 +191,44 @@ describe("ResearchDeskPage", () => {
       job: {
         type: "rankings_research",
         rankingLimit: 250,
+        sourceTarget: 10,
         leagueSize: 12,
         discoverNewSources: true,
       },
     });
+  });
+
+  it("can return to the saved source default without sending an override", async () => {
+    window.localStorage.setItem(RESEARCH_OWNER_TOKEN_KEY, "owner-secret");
+    const fetchMock = mockBridge();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<MemoryRouter><ResearchDeskPage localDevelopmentOverride={false} /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText("Player name"), { target: { value: "Bijan Robinson" } });
+    const sourceTarget = screen.getByLabelText("Source target");
+    expect(sourceTarget).toHaveValue("");
+    fireEvent.change(sourceTarget, { target: { value: "7" } });
+    fireEvent.change(sourceTarget, { target: { value: "" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: /queue research/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: /queue research/i }));
+    const call = fetchMock.mock.calls.find(([url, init]) => url === "/api/research/jobs" && init?.method === "POST");
+    expect(JSON.parse(String(call?.[1]?.body))).not.toHaveProperty("sourceTarget");
+  });
+
+  it("keeps named-source refreshes separate from multi-source targets", async () => {
+    window.localStorage.setItem(RESEARCH_OWNER_TOKEN_KEY, "owner-secret");
+    const fetchMock = mockBridge();
+    vi.stubGlobal("fetch", fetchMock);
+    render(<MemoryRouter><ResearchDeskPage localDevelopmentOverride={false} /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText("Source target"), { target: { value: "8" } });
+    fireEvent.click(screen.getByLabelText("Source refresh"));
+    expect(screen.queryByLabelText("Source target")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Ranking source"), { target: { value: "FantasyPros" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: /queue research/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: /queue research/i }));
+    const call = fetchMock.mock.calls.find(([url, init]) => url === "/api/research/jobs" && init?.method === "POST");
+    const body = JSON.parse(String(call?.[1]?.body));
+    expect(body).toMatchObject({ type: "source_refresh", sourceName: "FantasyPros" });
+    expect(body).not.toHaveProperty("sourceTarget");
   });
 
   it("shares the selected league size and submits it for every assignment type", async () => {

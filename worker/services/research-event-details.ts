@@ -22,7 +22,7 @@ export function safeResearchEventDetails(json: string): Record<string, unknown> 
   }
   if (Array.isArray(value.rankingSnapshotIds)) {
     result.rankingSnapshotIds = value.rankingSnapshotIds.filter((id): id is string =>
-      typeof id === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(id)).slice(0, 5);
+      typeof id === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(id)).slice(0, 10);
   }
   if (typeof value.leaseExpiresAt === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value.leaseExpiresAt)) {
     result.leaseExpiresAt = value.leaseExpiresAt;
