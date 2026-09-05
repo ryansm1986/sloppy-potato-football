@@ -2,6 +2,7 @@ import type { DrizzleD1Database } from "drizzle-orm/d1";
 import { z } from "zod";
 import * as schema from "../db/schema";
 import { canonicalSourceDomain } from "./source-domains";
+import { assertPublisherUrlsAllowed, getPublisherPolicy, publisherFlags, registerPublisherEvidence } from "./publishers";
 
 export { canonicalSourceDomain } from "./source-domains";
 
@@ -131,6 +132,7 @@ function dedupeSources(sources: SleeperReportInput["candidates"][number]["source
 }
 
 export async function persistSleeperReport(db: Database, options: PersistSleeperReportOptions) {
+  assertPublisherUrlsAllowed(await getPublisherPolicy(db),options.report.candidates.flatMap(candidate=>candidate.sources.map(source=>source.url)));
   const existing = await db.$client.prepare("SELECT id, published_at FROM sleeper_reports WHERE job_id = ?")
     .bind(options.jobId).first<{ id: string; published_at: number | null }>();
   if (existing) {
@@ -264,6 +266,8 @@ export async function publishSleeperReport(db: Database, reportId: string) {
   const result = await db.$client.prepare(
     "UPDATE sleeper_reports SET published_at = ? WHERE id = ? AND published_at IS NULL",
   ).bind(Date.now(), reportId).run();
+  const sources=await db.$client.prepare("SELECT ss.publisher,ss.url,sr.created_at FROM sleeper_candidate_sources ss JOIN sleeper_candidates sc ON sc.id=ss.candidate_id JOIN sleeper_reports sr ON sr.id=sc.report_id WHERE sr.id=? AND sr.published_at IS NOT NULL").bind(reportId).all<{publisher:string;url:string;created_at:number}>();
+  await registerPublisherEvidence(db,sources.results.map(source=>({url:source.url,name:source.publisher,kind:"sleepers",seenAt:source.created_at})));
   return (result.meta.changes ?? 0) > 0;
 }
 
@@ -314,11 +318,11 @@ type SourceRow = {
   is_new_discovery: number;
 };
 
-export async function getLatestSleeperReport(db: Database, leagueSize?: number) {
-  return (await getSleeperReports(db, 1, undefined, leagueSize))[0] ?? null;
+export async function getLatestSleeperReport(db: Database, leagueSize?: number, identity = "primary-owner") {
+  return (await getSleeperReports(db, 1, undefined, leagueSize, identity, true))[0] ?? null;
 }
 
-export async function getSleeperReports(db: Database, limit = 50, researchJobId?: string, leagueSize?: number) {
+export async function getSleeperReports(db: Database, limit = 50, researchJobId?: string, leagueSize?: number, identity = "primary-owner", currentOnly = false) {
   const reportRows = await db.$client.prepare(
     `SELECT id, job_id, season, scoring_format, ranking_type, league_size, summary, generated_at, created_at,
             discover_new_sources, new_publisher_count
@@ -348,7 +352,10 @@ export async function getSleeperReports(db: Database, limit = 50, researchJobId?
        ORDER BY publisher, id`,
     ).bind(JSON.stringify(candidateIds)).all<SourceRow>();
   const sourcesByCandidate = new Map<string, SourceRow[]>();
+  const policy=await getPublisherPolicy(db,identity);
   for (const source of sourceRows.results) {
+    const flags=publisherFlags(policy,source.url);
+    if(currentOnly && (flags.blocked || flags.excluded)) continue;
     const values = sourcesByCandidate.get(source.candidate_id) ?? [];
     values.push(source);
     sourcesByCandidate.set(source.candidate_id, values);
@@ -368,7 +375,7 @@ export async function getSleeperReports(db: Database, limit = 50, researchJobId?
       playerName: candidate.player_name,
       team: candidate.team,
       position: candidate.position,
-      sourceCount: candidate.source_count,
+      sourceCount: currentOnly ? new Set((sourcesByCandidate.get(candidate.id) ?? []).map(source=>canonicalSourceDomain(source.url))).size : candidate.source_count,
       recommendedPickStart: candidate.recommended_pick_start,
       recommendedPickEnd: candidate.recommended_pick_end,
       recommendedRoundStart: Math.floor((candidate.recommended_pick_start - 1) / report.league_size) + 1,
@@ -383,8 +390,9 @@ export async function getSleeperReports(db: Database, limit = 50, researchJobId?
         publishedAt: source.published_at === null ? null : new Date(source.published_at).toISOString(),
         recommendation: source.recommendation,
         isNewDiscovery: source.is_new_discovery === 1,
+        ...publisherFlags(policy,source.url),
       })),
-    })),
+    })).filter(candidate=>!currentOnly || candidate.sourceCount>0).sort((left,right)=>currentOnly ? right.sourceCount-left.sourceCount || left.recommendedPickStart-right.recommendedPickStart || left.playerName.localeCompare(right.playerName) : left.rank-right.rank).map((candidate,index)=>currentOnly ? {...candidate,rank:index+1} : candidate),
   ])) as Record<typeof sleeperPositions[number], unknown[]>;
 
   return {

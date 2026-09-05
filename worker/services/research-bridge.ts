@@ -3,6 +3,7 @@ import { z } from "zod";
 import * as schema from "../db/schema";
 import { defaultResearchSettings, getResearchSettings, researchSettingsInstructions, type ResearchSettings } from "./agent-settings";
 import { safeResearchEventDetails } from "./research-event-details";
+import { assertPublisherUrlsAllowed, assertRefreshPublisherAllowed, getPublisherPolicy, PublisherError, publisherPolicyInstructions } from "./publishers";
 import {
   createRankingSnapshot,
   discardPendingRankingSnapshots,
@@ -191,7 +192,7 @@ export type RunnerRow = {
 
 export class ResearchBridgeError extends Error {
   constructor(
-    readonly code: "not_found" | "job_conflict" | "lease_invalid" | "runner_not_registered" | "result_conflict",
+    readonly code: "not_found" | "job_conflict" | "lease_invalid" | "runner_not_registered" | "result_conflict" | "source_policy_changed",
     message: string,
     readonly status: 404 | 409,
   ) {
@@ -259,19 +260,19 @@ function baseExecutionContext(row: ResearchJobRow) {
   }
 }
 
-function executionContext(row: ResearchJobRow) {
+function executionContext(row: ResearchJobRow, policyHint = "") {
   const input = parseJson<ResearchTaskInput>(row.task_input_json, {} as never);
   const preferences = researchSettingsInstructions(input.researchSettings ?? defaultResearchSettings, row.job_type === "source_refresh");
   let base = baseExecutionContext(row);
   // Legacy runners bound this field to 2,000 characters. Preserve preferences
   // even when source discovery carries a large historical domain list.
-  const budget = 2_000 - preferences.length;
+  const budget = 2_000 - preferences.length - policyHint.length;
   const domains = input.knownSourceDomains?.join(", ");
   if (domains && base.length > budget) {
     const domainBudget = Math.max(0, budget - (base.length - domains.length) - 1);
     base = base.replace(domains, `${domains.slice(0, domainBudget)}…`);
   }
-  return (base.length > budget ? `${base.slice(0, budget - 1)}…` : base) + preferences;
+  return (base.length > budget ? `${base.slice(0, budget - 1)}…` : base) + preferences + policyHint;
 }
 
 function legacyCompatibleClaimInput(row: ResearchJobRow) {
@@ -319,6 +320,8 @@ export async function createResearchJob(
     "SELECT * FROM research_jobs WHERE owner_identity = ? AND idempotency_key = ?",
   ).bind(ownerIdentity, idempotencyKey).first<ResearchJobRow>();
   if (existing) return { job: toPublicJob(existing), created: false };
+
+  if (input.type === "source_refresh") await assertRefreshPublisherAllowed(db, input.sourceName);
 
   const id = crypto.randomUUID();
   const now = Date.now();
@@ -470,10 +473,13 @@ export async function claimResearchJob(db: Database, runnerId: string) {
   const runner = await db.$client.prepare("SELECT * FROM research_runners WHERE id = ?").bind(runnerId).first<RunnerRow>();
   if (!runner) throw new ResearchBridgeError("runner_not_registered", "Send a runner heartbeat before claiming jobs", 409);
   const now = Date.now();
+  const publisherPolicy = await getPublisherPolicy(db);
+  const policyHint = publisherPolicyInstructions(publisherPolicy);
   if (runner.current_job_id) {
     const active = await findJob(db, runner.current_job_id);
     if (active?.status === "running" && active.leased_by_runner_id === runnerId
       && active.lease_token && active.lease_expires_at && active.lease_expires_at >= now) {
+      if (active.job_type === "source_refresh") await assertRefreshPublisherAllowed(db,parseJson<ResearchTaskInput>(active.task_input_json,{} as never).sourceName,publisherPolicy);
       return {
         id: active.id,
         type: active.job_type,
@@ -482,7 +488,7 @@ export async function claimResearchJob(db: Database, runnerId: string) {
         maxAttempts: active.max_attempts,
         leaseToken: active.lease_token,
         leaseExpiresAt: iso(active.lease_expires_at),
-        executionContext: executionContext(active),
+        executionContext: executionContext(active, policyHint),
       };
     }
   }
@@ -507,7 +513,20 @@ export async function claimResearchJob(db: Database, runnerId: string) {
   const candidates = await db.$client.prepare(
     "SELECT * FROM research_jobs WHERE status = 'queued' ORDER BY priority DESC, created_at, id LIMIT 10",
   ).all<ResearchJobRow>();
-  const candidate = candidates.results.find((job) => capabilities.length === 0 || capabilities.includes(job.job_type));
+  let candidate: ResearchJobRow | undefined;
+  for (const job of candidates.results) {
+    if (capabilities.length !== 0 && !capabilities.includes(job.job_type)) continue;
+    if (job.job_type === "source_refresh") {
+      try { await assertRefreshPublisherAllowed(db, parseJson<ResearchTaskInput>(job.task_input_json, {} as never).sourceName, publisherPolicy); }
+      catch (error) {
+        if (!(error instanceof PublisherError)) throw error;
+        await db.$client.prepare("UPDATE research_jobs SET status='failed',error_code='source_policy_changed',error_message=?,completed_at=?,updated_at=? WHERE id=? AND status='queued'").bind(error.message,now,now,job.id).run();
+        await insertEvent(db,job.id,"failed","system",undefined,{code:"source_policy_changed",message:error.message});
+        continue;
+      }
+    }
+    candidate=job; break;
+  }
   if (!candidate) {
     await db.$client.prepare(
       "UPDATE research_runners SET status = 'idle', current_job_id = NULL, last_seen_at = ?, updated_at = ? WHERE id = ?",
@@ -521,8 +540,9 @@ export async function claimResearchJob(db: Database, runnerId: string) {
     `UPDATE research_jobs SET status = 'running', attempt_count = attempt_count + 1,
        leased_by_runner_id = ?, lease_token = ?, lease_expires_at = ?,
        started_at = COALESCE(started_at, ?), updated_at = ?
-     WHERE id = ? AND status = 'queued'`,
-  ).bind(runnerId, leaseToken, leaseExpiresAt, now, now, candidate.id).run();
+     WHERE id = ? AND status = 'queued'
+       AND (SELECT version FROM publisher_policy_version WHERE id=1) = ?`,
+  ).bind(runnerId, leaseToken, leaseExpiresAt, now, now, candidate.id,publisherPolicy.version).run();
   if ((claimed.meta.changes ?? 0) === 0) return claimResearchJob(db, runnerId);
   await db.$client.prepare(
     "UPDATE research_runners SET status = 'busy', current_job_id = ?, last_seen_at = ?, updated_at = ? WHERE id = ?",
@@ -537,7 +557,7 @@ export async function claimResearchJob(db: Database, runnerId: string) {
     maxAttempts: job.max_attempts,
     leaseToken,
     leaseExpiresAt: iso(leaseExpiresAt),
-    executionContext: executionContext(job),
+    executionContext: executionContext(job, policyHint),
   };
 }
 
@@ -603,6 +623,8 @@ export async function completeResearchJob(db: Database, jobId: string, input: z.
   assertActiveLease(row, input.runnerId, input.leaseToken, now);
 
   const taskInput = parseJson<ResearchTaskInput>(row.task_input_json, {} as never);
+  const publisherPolicy = await getPublisherPolicy(db);
+  if (row.job_type === "source_refresh") await assertRefreshPublisherAllowed(db,taskInput.sourceName,publisherPolicy);
   const runner = await db.$client.prepare("SELECT provider FROM research_runners WHERE id = ?")
     .bind(input.runnerId).first<{ provider: string }>();
   const provider = runner?.provider === "claude" ? "claude" : "codex";
@@ -712,6 +734,15 @@ export async function completeResearchJob(db: Database, jobId: string, input: z.
     snapshotsToCreate.push(snapshot);
   }
 
+  const evidenceUrls = [
+    ...input.result.citations.map(citation => citation.url),
+    ...input.result.insights.flatMap(insight => insight.citationUrls ?? []),
+    ...snapshotsToCreate.flatMap(snapshot => snapshot.source.attributionUrl ? [snapshot.source.attributionUrl] : []),
+    ...(parsedSleeperReport?.candidates.flatMap(candidate => candidate.sources.map(source => source.url)) ?? []),
+    ...(input.result.rankingSnapshot && typeof input.result.rankingSnapshot === "object" && "sourceUrl" in input.result.rankingSnapshot && typeof input.result.rankingSnapshot.sourceUrl === "string" ? [input.result.rankingSnapshot.sourceUrl] : []),
+  ];
+  // Check all evidence, not only the board selected for publication.
+  assertPublisherUrlsAllowed(publisherPolicy,evidenceUrls);
   const rankingSnapshotIds: string[] = [];
   // The prompt receives a bounded recent-domain snapshot, but persisted labels
   // compare against the entire source registry and completed snapshot history.
@@ -760,7 +791,8 @@ export async function completeResearchJob(db: Database, jobId: string, input: z.
     `UPDATE research_jobs SET status = 'completed', completion_key = ?, result_json = ?,
        ranking_snapshot_id = ?, new_publisher_count = ?, completed_at = ?, updated_at = ?, lease_expires_at = NULL
      WHERE id = ? AND status = 'running' AND leased_by_runner_id = ? AND lease_token = ?
-       AND lease_expires_at >= ?`,
+       AND lease_expires_at >= ?
+       AND (SELECT version FROM publisher_policy_version WHERE id=1) = ?`,
   ).bind(
     input.resultId,
     resultJson,
@@ -772,10 +804,13 @@ export async function completeResearchJob(db: Database, jobId: string, input: z.
     input.runnerId,
     input.leaseToken,
     finalizedAt,
+    publisherPolicy.version,
   ).run();
   if ((updated.meta.changes ?? 0) === 0) {
     if (sleeperReportId) await discardUnpublishedSleeperReport(db, jobId);
     await discardPendingRankingSnapshots(db, jobId);
+    const currentPolicy = await getPublisherPolicy(db);
+    if (currentPolicy.version !== publisherPolicy.version) throw new ResearchBridgeError("source_policy_changed", "Publisher policy changed while this result was being saved. Retry with the current publisher policy.", 409);
     throw new ResearchBridgeError("lease_invalid", "The job lease changed before completion", 409);
   }
   await publishRankingSnapshots(db, jobId);

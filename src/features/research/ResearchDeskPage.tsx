@@ -152,7 +152,7 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
   const favoriteSource = searchParams.get("sourceName") ?? "";
   const requestedPlayer = searchParams.get("subject") ?? "";
   const localDevelopment = localDevelopmentOverride ?? isLocalDevelopment();
-  const { ownerToken, revision: tokenRevision } = useResearchOwnerAccess();
+  const { ownerToken, revision: tokenRevision, google, canResearch } = useResearchOwnerAccess();
   const [accessState, setAccessState] = useState<BridgeAccessState>(() => localDevelopment || Boolean(ownerToken) ? "checking" : "locked");
   const [jobType, setJobType] = useState<ResearchJobType>(favoriteSource ? "source_refresh" : "player_research");
   const [subject, setSubject] = useState(requestedPlayer);
@@ -183,7 +183,7 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
   const [queueVisible, setQueueVisible] = useState(10);
   const [lastRefreshed, setLastRefreshed] = useState<string | null>(null);
   const refreshRequest = useRef<AbortController | null>(null);
-  const canAttemptAccess = localDevelopment || Boolean(ownerToken);
+  const canAttemptAccess = google ? canResearch : localDevelopment || Boolean(ownerToken);
   const authorized = accessState === "authorized";
   const runnerState: RunnerDisplayState = authorized ? runnerDisplayState(runner) : "locked";
   const completedVersion = jobs.filter((job) => job.status === "completed").map((job) => `${job.id}:${job.updatedAt}`).join("|");

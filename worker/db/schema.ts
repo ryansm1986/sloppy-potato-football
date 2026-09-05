@@ -1,5 +1,7 @@
 import { sql } from "drizzle-orm";
+// Auth and publisher tables mirror the additive hand-written migrations.
 import {
+  check,
   index,
   integer,
   primaryKey,
@@ -10,6 +12,32 @@ import {
 } from "drizzle-orm/sqlite-core";
 
 const nowMs = sql`(unixepoch() * 1000)`;
+
+export const authUsers = sqliteTable("auth_users", {
+  id: text("id").primaryKey().notNull(), email: text("email").notNull().unique(), googleSub: text("google_sub").unique(), name: text("name"),
+  role: text("role").notNull(), status: text("status").notNull(), createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(), updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+}, (table) => [uniqueIndex("auth_single_owner").on(table.role).where(sql`${table.role} = 'owner'`), check("auth_users_role_check", sql`${table.role} IN ('owner', 'researcher', 'viewer')`), check("auth_users_status_check", sql`${table.status} IN ('invited', 'active', 'revoked')`)]);
+export const authSessions = sqliteTable("auth_sessions", {
+  tokenHash: text("token_hash").primaryKey().notNull(), userId: text("user_id").notNull().references(() => authUsers.id, { onDelete: "cascade" }), kind: text("kind").notNull(), csrfToken: text("csrf_token").notNull(),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(), expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+}, (table) => [index("auth_sessions_user_idx").on(table.userId), index("auth_sessions_expiry_idx").on(table.expiresAt), check("auth_sessions_kind_check", sql`${table.kind} IN ('browser', 'desktop')`)]);
+export const authOauthFlows = sqliteTable("auth_oauth_flows", {
+  stateHash: text("state_hash").primaryKey().notNull(), browserHash: text("browser_hash").notNull(), nonce: text("nonce").notNull(), verifier: text("verifier").notNull(), desktopRequestId: text("desktop_request_id"), expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+});
+export const authDesktopRequests = sqliteTable("auth_desktop_requests", {
+  id: text("id").primaryKey().notNull(), secretHash: text("secret_hash").notNull(), userId: text("user_id").references(() => authUsers.id, { onDelete: "cascade" }), browserSessionHash: text("browser_session_hash"), approvedAt: integer("approved_at", { mode: "timestamp_ms" }), expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+});
+export const authAuditEvents = sqliteTable("auth_audit_events", {
+  id: text("id").primaryKey().notNull(), actorId: text("actor_id"), action: text("action").notNull(), targetId: text("target_id"), createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+}, (table) => [index("auth_audit_created_idx").on(sql`${table.createdAt} DESC`)]);
+export const publishers = sqliteTable("publishers", {
+  id: text("id").primaryKey().notNull(), domain: text("domain").notNull().unique(), name: text("name").notNull(), url: text("url").notNull(), blocked: integer("blocked", { mode: "boolean" }).notNull().default(false), archived: integer("archived", { mode: "boolean" }).notNull().default(false), notes: text("notes").notNull().default(""), tagsJson: text("tags_json").notNull().default("[]"), rankings: integer("rankings", { mode: "boolean" }).notNull().default(false), sleepers: integer("sleepers", { mode: "boolean" }).notNull().default(false), firstSeenAt: integer("first_seen_at", { mode: "timestamp_ms" }).notNull(), lastSeenAt: integer("last_seen_at", { mode: "timestamp_ms" }).notNull(),
+}, (table) => [index("publishers_seen_idx").on(sql`${table.lastSeenAt} DESC`), check("publishers_blocked_check", sql`${table.blocked} IN (0, 1)`), check("publishers_archived_check", sql`${table.archived} IN (0, 1)`)]);
+export const publisherPreferences = sqliteTable("publisher_preferences", {
+  publisherId: text("publisher_id").notNull().references(() => publishers.id, { onDelete: "cascade" }), ownerIdentity: text("owner_identity").notNull(), favorite: integer("favorite", { mode: "boolean" }).notNull().default(false), excluded: integer("excluded", { mode: "boolean" }).notNull().default(false), updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+}, (table) => [primaryKey({ columns: [table.publisherId, table.ownerIdentity] }), check("publisher_preferences_favorite_check", sql`${table.favorite} IN (0, 1)`), check("publisher_preferences_excluded_check", sql`${table.excluded} IN (0, 1)`)]);
+export const publisherPolicyVersion = sqliteTable("publisher_policy_version", { id: integer("id").primaryKey(), version: integer("version").notNull().default(0) }, (table) => [check("publisher_policy_version_id_check", sql`${table.id} = 1`)]);
+export const authStartLimits = sqliteTable("auth_start_limits", { bucketKey: text("bucket_key").primaryKey().notNull(), attempts: integer("attempts").notNull(), expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull() }, (table) => [index("auth_start_limits_expiry_idx").on(table.expiresAt)]);
 
 export const leagues = sqliteTable(
   "leagues",

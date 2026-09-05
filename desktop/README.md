@@ -1,5 +1,13 @@
 # Sloppy Potato desktop shell
 
+## Google access
+
+When Google access is enabled on the Worker, desktop sign-in opens the system browser. After Google sign-in, explicitly confirm the computer in that browser and return to the app. The handoff can be cancelled or restarted and expires after at most ten minutes. Google credentials never enter the desktop renderer; only an opaque, revocable app session is stored using OS-protected encryption, separately from the runner credential.
+
+`window.sloppyPotatoDesktop.auth` exposes `status()`, `signIn()`, `cancel()` and `signOut()` without tokens. The packaged API proxy supplies the app session only to the configured origin, never to machine-runner endpoints, and rejects redirects. Owner enrollment uses the signed-in owner session automatically; viewer/researcher accounts cannot manage local runner controls, credentials, startup or API destination settings. Each privileged action verifies the current role with the server. Already configured unattended runners continue with their separate machine credential when a user signs out.
+
+Changing the API origin stops the local runner and removes local app/runner credentials; reconnect the computer to the new server. App sign-out alone does not remove or revoke its machine credential. Production Google authentication should be tested in the packaged `potato://app` shell: the Vite localhost development renderer does not use the packaged API proxy.
+
 This directory contains a secure Electron host for the existing Vite UI and an injectable desktop runner service. It is Windows-first and designed to live in the notification area after its window closes.
 
 Implemented shell behavior:

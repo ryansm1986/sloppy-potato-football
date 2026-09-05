@@ -11,6 +11,7 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
 
 export interface DesktopCredentials {
   runnerToken?: string;
+  appSession?: { token: string; apiOrigin: string };
 }
 
 export interface FileDataAdapter {
@@ -30,6 +31,7 @@ interface PersistedDesktopData {
   settings: DesktopSettings;
   encryptedCredentials?: {
     runnerToken?: string;
+    appSession?: string;
   };
 }
 
@@ -110,6 +112,14 @@ export class SecureConfigStore {
         if (encryptedToken && this.cipher.isAvailable()) {
           this.credentials.runnerToken = this.cipher.decrypt(encryptedToken);
         }
+        const encryptedSession = parsed.encryptedCredentials?.appSession;
+        if (encryptedSession && this.cipher.isAvailable()) {
+          const session = JSON.parse(this.cipher.decrypt(encryptedSession));
+          if (typeof session.token === "string" && /^sp_session_[A-Za-z0-9_-]{20,}$/.test(session.token)
+            && typeof session.apiOrigin === "string") {
+            this.credentials.appSession = { token: session.token, apiOrigin: new URL(session.apiOrigin).origin };
+          }
+        }
       } catch {
         // A malformed or no-longer-decryptable file must not prevent app startup.
         this.settings = DEFAULT_DESKTOP_SETTINGS;
@@ -171,19 +181,47 @@ export class SecureConfigStore {
     await this.persist();
   }
 
+  /** Main-process only; origin binding prevents API URL changes from leaking sessions. */
+  getAppSessionToken(apiBaseUrl: string): string | undefined {
+    this.assertInitialized();
+    const session = this.credentials.appSession;
+    return session?.apiOrigin === new URL(normalizeApiBaseUrl(apiBaseUrl)).origin ? session.token : undefined;
+  }
+
+  async setAppSessionToken(token: string, apiBaseUrl: string): Promise<void> {
+    this.assertInitialized();
+    if (!/^sp_session_[A-Za-z0-9_-]{20,}$/.test(token) || token.length > 4096) {
+      throw new Error("The app returned an invalid sign-in credential.");
+    }
+    if (!this.cipher.isAvailable()) throw new Error("Secure credential storage is unavailable on this computer.");
+    const previous = this.credentials.appSession;
+    this.credentials.appSession = { token, apiOrigin: new URL(normalizeApiBaseUrl(apiBaseUrl)).origin };
+    try { await this.persist(); } catch (error) { this.credentials.appSession = previous; throw error; }
+  }
+
+  async clearAppSessionToken(): Promise<void> {
+    this.assertInitialized();
+    delete this.credentials.appSession;
+    await this.persist();
+  }
+
   private async persist(): Promise<void> {
     const runnerToken = this.credentials.runnerToken;
-    if (runnerToken && !this.cipher.isAvailable()) {
+    const appSession = this.credentials.appSession;
+    if ((runnerToken || appSession) && !this.cipher.isAvailable()) {
       throw new Error("Secure credential storage is unavailable on this computer.");
     }
     const data: PersistedDesktopData = {
       version: 1,
       installationId: this.installationId,
       settings: this.settings,
-      encryptedCredentials: runnerToken ? { runnerToken: this.cipher.encrypt(runnerToken) } : undefined,
+      encryptedCredentials: runnerToken || appSession ? {
+        ...(runnerToken ? { runnerToken: this.cipher.encrypt(runnerToken) } : {}),
+        ...(appSession ? { appSession: this.cipher.encrypt(JSON.stringify(appSession)) } : {}),
+      } : undefined,
     };
     const serialized = JSON.stringify(data, null, 2);
-    this.writeQueue = this.writeQueue.then(() => this.files.writeAtomically(serialized));
+    this.writeQueue = this.writeQueue.catch(() => undefined).then(() => this.files.writeAtomically(serialized));
     await this.writeQueue;
   }
 

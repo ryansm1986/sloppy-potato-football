@@ -1,0 +1,6 @@
+import { authRequest } from "../auth/auth-api";
+export type Publisher = { id: string; domain: string; name: string; url: string; blocked: boolean; archived: boolean; notes: string; tags: string[]; favorite: boolean; excluded: boolean; kinds: string[]; firstSeenAt: string; lastSeenAt: string; rankingSourceIds: string[] };
+const headers = (token: string) => ({ "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) });
+export const fetchPublishers = (token: string, query: URLSearchParams = new URLSearchParams(), signal?: AbortSignal) => authRequest<{ publishers: Publisher[] }>(`/api/publishers?${query}`, { headers: headers(token), signal });
+export const updatePublisher = (token: string, id: string, patch: Partial<Pick<Publisher, "blocked" | "archived" | "name" | "notes" | "tags">>) => authRequest<{ publisher: Publisher }>(`/api/publishers/${encodeURIComponent(id)}`, { method: "PATCH", headers: headers(token), body: JSON.stringify(patch) });
+export const savePublisherPreferences = (token: string, id: string, patch: Partial<Pick<Publisher, "favorite" | "excluded">>) => authRequest<{ publisher: Publisher }>(`/api/publishers/${encodeURIComponent(id)}/preferences`, { method: "PUT", headers: headers(token), body: JSON.stringify(patch) });

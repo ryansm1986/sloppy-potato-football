@@ -20,6 +20,12 @@ function subscribe<T>(channel: string, listener: (value: T) => void): () => void
 }
 
 const desktopApi: SloppyPotatoDesktopApi = Object.freeze({
+  auth: Object.freeze({
+    status: noArgs<import("./shared/contracts.js").DesktopAuthStatus>(IPC_CHANNELS.authStatus),
+    signIn: noArgs<import("./shared/contracts.js").DesktopAuthStatus>(IPC_CHANNELS.authSignIn),
+    cancel: noArgs<import("./shared/contracts.js").DesktopAuthStatus>(IPC_CHANNELS.authCancel),
+    signOut: noArgs<import("./shared/contracts.js").DesktopAuthStatus>(IPC_CHANNELS.authSignOut),
+  }),
   app: Object.freeze({
     info: noArgs<import("./shared/contracts.js").DesktopAppInfo>(IPC_CHANNELS.appInfo),
     show: noArgs<void>(IPC_CHANNELS.appShow),

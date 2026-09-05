@@ -12,6 +12,7 @@ import {
   resolveOrCreateRankingSource,
 } from "./ranking-sources";
 import { canonicalSourceDomain } from "./source-domains";
+import { assertPublisherUrlsAllowed, getPublisherPolicy, publisherFlags, registerPublisherEvidence } from "./publishers";
 
 type Database = DrizzleD1Database<typeof schema> & { $client: D1Database };
 
@@ -97,6 +98,7 @@ export async function createRankingSnapshot(
   input: RankingSnapshotInput,
   discovery?: RankingSnapshotDiscovery,
 ) {
+  if (input.source.attributionUrl) assertPublisherUrlsAllowed(await getPublisherPolicy(db),[input.source.attributionUrl]);
   const registryInput = rankingSourceRegistryInput.parse({
     canonicalKey: input.source.canonicalKey ?? input.source.slug,
     slug: input.source.slug,
@@ -194,6 +196,7 @@ export async function createRankingSnapshot(
        FROM json_each(?)`,
     ).bind(JSON.stringify(entryRows)),
   ]);
+  if (!discovery && input.source.attributionUrl) await registerPublisherEvidence(db,[{url:input.source.attributionUrl,name:input.source.name,kind:"rankings",seenAt:now}]);
   return { id: snapshotId, created: true };
 }
 
@@ -276,6 +279,8 @@ export async function publishRankingSnapshots(db: Database, researchJobId: strin
   const result = await db.$client.prepare(
     "UPDATE ranking_snapshots SET status = 'completed' WHERE research_job_id = ? AND status = 'pending'",
   ).bind(researchJobId).run();
+  const sources=await db.$client.prepare("SELECT rs.name,COALESCE(sn.source_url,rs.attribution_url) AS url,sn.created_at FROM ranking_snapshots sn JOIN ranking_sources rs ON rs.id=sn.source_id WHERE sn.research_job_id=? AND sn.status='completed'").bind(researchJobId).all<{name:string;url:string|null;created_at:number}>();
+  await registerPublisherEvidence(db,sources.results.flatMap(source=>source.url ? [{url:source.url,name:source.name,kind:"rankings" as const,seenAt:source.created_at}] : []));
   return result.meta.changes ?? 0;
 }
 
@@ -299,7 +304,7 @@ export const rankingSnapshotQueryInput = z.object({
 
 export type RankingSnapshotQuery = z.input<typeof rankingSnapshotQueryInput>;
 
-export async function getRankingSnapshots(db: Database, limit: number, query: RankingSnapshotQuery = {}) {
+export async function getRankingSnapshots(db: Database, limit: number, query: RankingSnapshotQuery = {}, identity = "primary-owner") {
   const validatedQuery = rankingSnapshotQueryInput.parse(query);
   // An exact run is a historical board, independent of the current UI scope.
   const parsedQuery = validatedQuery.researchJobId
@@ -391,6 +396,7 @@ export async function getRankingSnapshots(db: Database, limit: number, query: Ra
     entriesBySnapshot.set(entry.snapshotId, current);
   }
 
+  const policy = await getPublisherPolicy(db,identity);
   return snapshotRows.map((snapshot) => ({
     id: snapshot.id,
     source: {
@@ -401,6 +407,7 @@ export async function getRankingSnapshots(db: Database, limit: number, query: Ra
       kind: snapshot.sourceKind,
       provider: snapshot.sourceProvider,
       attributionUrl: snapshot.sourceAttributionUrl,
+      ...publisherFlags(policy,snapshot.sourceUrl ?? snapshot.sourceAttributionUrl),
     },
     title: snapshot.title,
     scoringFormat: snapshot.scoringFormat,

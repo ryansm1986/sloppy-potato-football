@@ -2,7 +2,8 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { net, protocol } from "electron";
-import { DESKTOP_ORIGIN, normalizeApiBaseUrl, resolveRendererAsset } from "./security.js";
+import { DESKTOP_ORIGIN, resolveRendererAsset } from "./security.js";
+import { proxyApiRequest, type ApiProxyAuth } from "./api-proxy.js";
 
 const STATIC_CSP = [
   "default-src 'self'",
@@ -19,6 +20,7 @@ const STATIC_CSP = [
 export interface DesktopProtocolOptions {
   rendererRoot: string;
   getApiBaseUrl(): string;
+  auth?: ApiProxyAuth;
 }
 
 export function registerDesktopScheme(): void {
@@ -49,31 +51,6 @@ async function existingAssetOrIndex(rendererRoot: string, pathname: string): Pro
   return resolveRendererAsset(rendererRoot, "/index.html");
 }
 
-async function proxyApiRequest(request: Request, apiBaseUrl: string): Promise<Response> {
-  const requestUrl = new URL(request.url);
-  const base = normalizeApiBaseUrl(apiBaseUrl);
-  const target = `${base}${requestUrl.pathname}${requestUrl.search}`;
-  const headers = new Headers(request.headers);
-  headers.delete("host");
-  headers.delete("origin");
-  headers.delete("referer");
-
-  const method = request.method.toUpperCase();
-  const body = method === "GET" || method === "HEAD" ? undefined : await request.arrayBuffer();
-  const response = await net.fetch(target, {
-    method,
-    headers,
-    body,
-    redirect: "manual",
-  });
-  // Never hand an upstream redirect back to the renderer: doing so could cause
-  // a privileged Authorization header to be replayed outside the configured API origin.
-  if (response.status >= 300 && response.status < 400) {
-    return new Response("The configured API returned an unsafe redirect.", { status: 502 });
-  }
-  return response;
-}
-
 export function installDesktopProtocol(options: DesktopProtocolOptions): void {
   protocol.handle("potato", async (request) => {
     const url = new URL(request.url);
@@ -82,7 +59,7 @@ export function installDesktopProtocol(options: DesktopProtocolOptions): void {
     }
 
     if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {
-      return proxyApiRequest(request, options.getApiBaseUrl());
+      return proxyApiRequest(request, options.getApiBaseUrl(), (input, init) => net.fetch(input instanceof URL ? input.toString() : input, init), options.auth);
     }
 
     const asset = await existingAssetOrIndex(options.rendererRoot, url.pathname);

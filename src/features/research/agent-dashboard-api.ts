@@ -1,3 +1,4 @@
+import { apiFetch } from "../auth/auth-api";
 import { ResearchApiError, type ResearchJob } from "./research-api";
 
 export type AgentResearchSettings = {
@@ -20,7 +21,7 @@ export type AgentDevice = { id: string; name: string; provider: string; version:
 export type AgentDashboard = { jobs: AgentJob[]; runners: AgentDevice[]; events: AgentEvent[]; settings: AgentResearchSettings };
 
 async function request<T>(path: string, token: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(path, { ...options, headers: { Accept: "application/json", ...(options.body ? { "Content-Type": "application/json" } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) } });
+  const response = await apiFetch(path, { ...options, headers: { Accept: "application/json", ...(options.body ? { "Content-Type": "application/json" } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) } });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({})) as { message?: string; error?: string };
     throw new ResearchApiError(payload.message ?? payload.error ?? `Agent dashboard returned ${response.status}`, response.status);

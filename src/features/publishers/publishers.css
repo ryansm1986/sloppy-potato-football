@@ -1,0 +1,25 @@
+.publisher-guide { padding: 20px 24px; line-height: 1.7; margin-bottom: 20px; }
+.publisher-guide p, .publisher-guide small { color: var(--muted); }
+.publisher-filters { display: grid; grid-template-columns: minmax(180px, 2fr) 1fr 1fr; padding: 20px; gap: 16px; border-bottom: 1px solid var(--border); }
+.publishers-page label { display: grid; gap: 8px; color: var(--muted); font-size: var(--font-body); }
+.publishers-page input:not([type=checkbox]), .publishers-page select, .publishers-page textarea { width: 100%; min-width: 0; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 10px; font: inherit; color-scheme: dark; }
+.publishers-page input:focus-visible, .publishers-page select:focus-visible, .publishers-page textarea:focus-visible { outline: 2px solid var(--amber); }
+.publisher-empty { padding: 24px; color: var(--muted); }
+.publisher-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 480px), 1fr)); }
+.publisher-card { padding: 24px; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); min-width: 0; }
+.publisher-card.is-blocked { box-shadow: inset 3px 0 var(--red); }
+.publisher-card header { display: flex; justify-content: space-between; align-items: start; gap: 12px; flex-wrap: wrap; }
+.publisher-card h2 { font-family: "Anton", sans-serif; font-weight: 400; margin: 0 0 8px; font-size: 1.5rem; overflow-wrap: anywhere; }
+.publisher-card a { color: var(--amber); overflow-wrap: anywhere; }
+.publisher-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.publisher-badges span { padding: 4px 8px; background: var(--surface-raised); border: 1px solid var(--border); border-radius: 6px; font-size: var(--font-small); }
+.publisher-meta { color: var(--muted); font-size: var(--font-small); }
+.publisher-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.publisher-actions label { display: flex; align-items: center; gap: 8px; }
+.publisher-actions input { accent-color: var(--amber); }
+.publisher-confirm { border: 1px solid var(--amber); border-radius: 6px; padding: 16px; margin-top: 16px; line-height: 1.7; }
+.publisher-notes { margin-top: 20px; color: var(--muted); }
+.publisher-notes summary { cursor: pointer; }
+.publisher-notes label { margin: 14px 0; }
+.publisher-notes textarea { min-height: 100px; resize: vertical; }
+@media (max-width: 700px) { .publisher-filters { grid-template-columns: 1fr; } .publisher-card { padding: 18px; } }

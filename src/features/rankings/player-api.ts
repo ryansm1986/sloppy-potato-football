@@ -1,3 +1,4 @@
+import { apiFetch } from "../auth/auth-api";
 export type CanonicalFantasyPlayer = {
   id: string;
   sport: string;
@@ -27,7 +28,7 @@ export async function fetchFantasyPlayerCatalog(signal?: AbortSignal): Promise<C
   do {
     const params = new URLSearchParams({ fantasy: "true", limit: "500" });
     if (cursor) params.set("cursor", cursor);
-    const response = await fetch(`/api/players?${params.toString()}`, {
+    const response = await apiFetch(`/api/players?${params.toString()}`, {
       headers: { Accept: "application/json" },
       signal,
     });

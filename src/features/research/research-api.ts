@@ -1,3 +1,4 @@
+import { apiFetch } from "../auth/auth-api";
 export const RESEARCH_OWNER_TOKEN_KEY = "spff:research-owner-token:v1";
 
 export type ResearchJobType = "source_refresh" | "player_research" | "rankings_research" | "sleepers_research";
@@ -131,7 +132,7 @@ async function parseError(response: Response): Promise<ResearchApiError> {
 }
 
 export async function fetchResearchJobs(token: string, signal?: AbortSignal, limit = 20): Promise<ResearchJob[]> {
-  const response = await fetch(`/api/research/jobs?limit=${Math.min(Math.max(Math.trunc(limit), 1), 100)}`, {
+  const response = await apiFetch(`/api/research/jobs?limit=${Math.min(Math.max(Math.trunc(limit), 1), 100)}`, {
     headers: authHeaders(token),
     signal,
   });
@@ -141,7 +142,7 @@ export async function fetchResearchJobs(token: string, signal?: AbortSignal, lim
 }
 
 export async function fetchRunnerStatus(token: string, signal?: AbortSignal): Promise<RunnerStatus> {
-  const response = await fetch("/api/research/runner/status", {
+  const response = await apiFetch("/api/research/runner/status", {
     headers: authHeaders(token),
     signal,
   });
@@ -153,7 +154,7 @@ export async function fetchRunnerStatus(token: string, signal?: AbortSignal): Pr
 }
 
 export async function fetchRunnerCredentials(token: string, signal?: AbortSignal): Promise<RunnerCredential[]> {
-  const response = await fetch("/api/research/runner-credentials", {
+  const response = await apiFetch("/api/research/runner-credentials", {
     headers: authHeaders(token),
     signal,
   });
@@ -163,7 +164,7 @@ export async function fetchRunnerCredentials(token: string, signal?: AbortSignal
 }
 
 export async function revokeRunnerCredential(token: string, credentialId: string): Promise<void> {
-  const response = await fetch(`/api/research/runner-credentials/${encodeURIComponent(credentialId)}`, {
+  const response = await apiFetch(`/api/research/runner-credentials/${encodeURIComponent(credentialId)}`, {
     method: "DELETE",
     headers: authHeaders(token),
   });
@@ -171,7 +172,7 @@ export async function revokeRunnerCredential(token: string, credentialId: string
 }
 
 export async function createResearchJob(token: string, input: CreateResearchJob): Promise<ResearchJob> {
-  const response = await fetch("/api/research/jobs", {
+  const response = await apiFetch("/api/research/jobs", {
     method: "POST",
     headers: authHeaders(token, true),
     body: JSON.stringify(input),
@@ -182,7 +183,7 @@ export async function createResearchJob(token: string, input: CreateResearchJob)
 }
 
 export async function retryResearchJob(token: string, jobId: string): Promise<ResearchJob> {
-  const response = await fetch(`/api/research/jobs/${encodeURIComponent(jobId)}/retry`, {
+  const response = await apiFetch(`/api/research/jobs/${encodeURIComponent(jobId)}/retry`, {
     method: "POST",
     headers: authHeaders(token, true),
   });
@@ -192,14 +193,14 @@ export async function retryResearchJob(token: string, jobId: string): Promise<Re
 }
 
 export async function fetchResearchSchedules(token: string, signal?: AbortSignal): Promise<ResearchSchedule[]> {
-  const response = await fetch("/api/research/schedules", { headers: authHeaders(token), signal });
+  const response = await apiFetch("/api/research/schedules", { headers: authHeaders(token), signal });
   if (!response.ok) throw await parseError(response);
   const payload = await response.json() as { schedules?: ResearchSchedule[] } | ResearchSchedule[];
   return Array.isArray(payload) ? payload : payload.schedules ?? [];
 }
 
 export async function createResearchSchedule(token: string, input: CreateResearchSchedule): Promise<ResearchSchedule> {
-  const response = await fetch("/api/research/schedules", {
+  const response = await apiFetch("/api/research/schedules", {
     method: "POST",
     headers: authHeaders(token, true),
     body: JSON.stringify(input),
@@ -214,7 +215,7 @@ export async function updateResearchSchedule(
   scheduleId: string,
   changes: Partial<CreateResearchSchedule>,
 ): Promise<ResearchSchedule> {
-  const response = await fetch(`/api/research/schedules/${encodeURIComponent(scheduleId)}`, {
+  const response = await apiFetch(`/api/research/schedules/${encodeURIComponent(scheduleId)}`, {
     method: "PATCH",
     headers: authHeaders(token, true),
     body: JSON.stringify(changes),
@@ -225,7 +226,7 @@ export async function updateResearchSchedule(
 }
 
 export async function deleteResearchSchedule(token: string, scheduleId: string): Promise<void> {
-  const response = await fetch(`/api/research/schedules/${encodeURIComponent(scheduleId)}`, {
+  const response = await apiFetch(`/api/research/schedules/${encodeURIComponent(scheduleId)}`, {
     method: "DELETE",
     headers: authHeaders(token),
   });
@@ -233,7 +234,7 @@ export async function deleteResearchSchedule(token: string, scheduleId: string):
 }
 
 export async function runResearchScheduleNow(token: string, scheduleId: string): Promise<ResearchJob> {
-  const response = await fetch(`/api/research/schedules/${encodeURIComponent(scheduleId)}/run`, {
+  const response = await apiFetch(`/api/research/schedules/${encodeURIComponent(scheduleId)}/run`, {
     method: "POST",
     headers: authHeaders(token, true),
   });

@@ -1,3 +1,4 @@
+import { apiFetch } from "../auth/auth-api";
 export type AgentRankingEntry = {
   id: string;
   playerId: string | null;
@@ -14,7 +15,7 @@ export type AgentRankingEntry = {
 
 export type AgentRankingSnapshot = {
   id: string;
-  source: { id: string; canonicalKey: string; name: string; slug: string; kind: "agent" | "import" | "derived" | "external" | "custom"; provider: string | null; attributionUrl?: string | null };
+  source: { id: string; canonicalKey: string; name: string; slug: string; kind: "agent" | "import" | "derived" | "external" | "custom"; provider: string | null; attributionUrl?: string | null; publisherId?: string | null; blocked?: boolean; archived?: boolean; favorite?: boolean; excluded?: boolean };
   title: string;
   scoringFormat: string;
   rankingType: string;
@@ -39,7 +40,7 @@ export async function fetchAgentRankings(signal?: AbortSignal, leagueSize?: numb
   const params = new URLSearchParams({ limit: "100" });
   if (leagueSize !== undefined) params.set("leagueSize", String(leagueSize));
   if (researchJobId) params.set("researchJobId", researchJobId);
-  const response = await fetch(`/api/rankings/snapshots?${params.toString()}`, {
+  const response = await apiFetch(`/api/rankings/snapshots?${params.toString()}`, {
     headers: { Accept: "application/json" },
     signal,
   });

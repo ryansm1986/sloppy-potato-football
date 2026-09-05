@@ -21,6 +21,7 @@ import {
   type RunnerCredential,
 } from "../research/research-api";
 import { useResearchOwnerAccess } from "../research/useResearchOwnerAccess";
+import AccountSettings from "../auth/AccountSettings";
 
 type AccessState = "locked" | "checking" | "authorized" | "denied";
 
@@ -37,7 +38,7 @@ function formatRelativeDate(value: string | null): string {
 
 export default function SettingsPage({ localDevelopmentOverride }: { localDevelopmentOverride?: boolean } = {}) {
   const localDevelopment = localDevelopmentOverride ?? isLocalDevelopment();
-  const { ownerToken, revision, saveOwnerToken, removeOwnerToken } = useResearchOwnerAccess();
+  const { ownerToken, revision, saveOwnerToken, removeOwnerToken, google, isOwner } = useResearchOwnerAccess();
   const [tokenDraft, setTokenDraft] = useState("");
   const [accessState, setAccessState] = useState<AccessState>(() => localDevelopment || ownerToken ? "checking" : "locked");
   const [credentials, setCredentials] = useState<RunnerCredential[]>([]);
@@ -46,7 +47,7 @@ export default function SettingsPage({ localDevelopmentOverride }: { localDevelo
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const desktop = window.sloppyPotatoDesktop;
-  const canAttemptAccess = localDevelopment || Boolean(ownerToken);
+  const canAttemptAccess = google ? isOwner : localDevelopment || Boolean(ownerToken);
 
   const refreshAccess = useCallback(async (signal?: AbortSignal) => {
     if (!canAttemptAccess) {
@@ -127,9 +128,9 @@ export default function SettingsPage({ localDevelopmentOverride }: { localDevelo
           <p className="page-header__copy">Manage private access, this computer, and every runner connected to Sloppy Potato.</p>
         </div>
         <div className="page-header__actions">
-          <span className={`status-pill status-pill--${accessState === "authorized" ? "online" : accessState === "denied" ? "offline" : "locked"}`}>
+          {(!google || isOwner) && <span className={`status-pill status-pill--${accessState === "authorized" ? "online" : accessState === "denied" ? "offline" : "locked"}`}>
             {accessState === "authorized" ? <CheckCircle2 size={12} /> : <KeyRound size={12} />} Owner {accessState}
-          </span>
+          </span>}
           <NavLink className="button button--secondary" to="/research">Open Research Desk</NavLink>
         </div>
       </header>
@@ -137,9 +138,10 @@ export default function SettingsPage({ localDevelopmentOverride }: { localDevelo
       {notice && <p className="research-notice settings-notice" role="status">{notice}</p>}
       {error && <p className="research-error settings-notice" role="alert"><AlertCircle size={13} /> {error}</p>}
 
-      <div className="settings-layout">
+      <AccountSettings />
+      {(!google || isOwner) && <div className="settings-layout">
         <div className="settings-main">
-          <section className="panel owner-token-card settings-access-card">
+          {!google && <section className="panel owner-token-card settings-access-card">
             <header><ShieldCheck size={18} /><div><p className="eyebrow">Access & security</p><h2>Owner access</h2></div></header>
             <div className={`settings-access-state is-${accessState}`}>
               {accessState === "authorized" ? <CheckCircle2 size={17} /> : <KeyRound size={17} />}
@@ -158,7 +160,7 @@ export default function SettingsPage({ localDevelopmentOverride }: { localDevelo
               {ownerToken && <button className="button button--secondary" type="button" onClick={removeToken}><Trash2 size={13} /> Remove</button>}
             </div>
             {localDevelopment && <small><ShieldCheck size={12} /> Local development can connect without a token.</small>}
-          </section>
+          </section>}
 
           {desktop ? <DesktopRunnerControls ownerToken={ownerToken} /> : (
             <section className="panel settings-desktop-empty">
@@ -205,7 +207,7 @@ export default function SettingsPage({ localDevelopmentOverride }: { localDevelo
             <div><p className="eyebrow">What lives here</p><h2>One place for runner setup</h2><p>Owner access, computer enrollment, polling controls, desktop behavior, credential recovery, connected computers, and runner activity are all managed in Settings.</p></div>
           </section>
         </aside>
-      </div>
+      </div>}
     </div>
   );
 }

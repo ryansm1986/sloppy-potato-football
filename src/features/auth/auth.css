@@ -1,0 +1,16 @@
+.auth-screen { min-height: 100dvh; display: grid; place-items: center; padding: 24px; }
+.auth-card { width: min(100%, 540px); padding: clamp(24px, 5vw, 48px); display: grid; gap: 18px; }
+.auth-card > svg { color: var(--amber); }
+.auth-card h1 { font-family: "Anton", sans-serif; font-size: clamp(2rem, 5vw, 3.2rem); font-weight: 400; margin: 0; }
+.auth-card p { color: var(--muted); line-height: 1.7; margin: 0; }
+.account-card, .access-members { padding: 24px; margin-bottom: 20px; }
+.account-card h2, .access-members h2 { font-family: "Anton", sans-serif; font-weight: 400; margin-top: 0; }
+.account-card p { color: var(--muted); line-height: 1.7; overflow-wrap: anywhere; }
+.account-card .button { margin-right: 12px; margin-top: 10px; }
+.member-form { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; margin: 20px 0; }
+.member-form label { display: grid; gap: 8px; flex: 1; min-width: 160px; }
+.access-members input, .access-members select { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 10px; font: inherit; color-scheme: dark; }
+.member-list { display: grid; gap: 12px; }
+.member-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px 0; border-top: 1px solid var(--border); }
+.member-row > div { flex: 1; min-width: 180px; overflow-wrap: anywhere; display: grid; gap: 5px; }
+.member-row small { color: var(--muted); }

@@ -45,6 +45,8 @@ export function resolveRendererAsset(rendererRoot: string, pathname: string): st
 
 export function normalizeApiBaseUrl(value: string): string {
   const url = new URL(value);
+  if (url.username || url.password) throw new Error("The API URL must not contain credentials.");
+  if (url.pathname !== "/" && url.pathname !== "") throw new Error("Use the API origin without a path.");
   const isLocalDevelopment =
     url.protocol === "http:" && (url.hostname === "localhost" || url.hostname === "127.0.0.1");
   if (url.protocol !== "https:" && !isLocalDevelopment) {

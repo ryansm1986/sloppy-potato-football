@@ -19,6 +19,7 @@ import { RunnerNotifier } from "./notifier.js";
 import type { RunnerController } from "./runner-controller.js";
 import { isSafeExternalUrl, isTrustedRendererUrl } from "./security.js";
 import { DesktopTray } from "./tray.js";
+import { DesktopAuthController } from "./desktop-auth.js";
 
 // electron-updater is published as CommonJS. A named ESM import works while
 // bundling/tests transpile it, but fails when Electron loads the externalized
@@ -73,6 +74,7 @@ export async function launchDesktopApp(options: DesktopBootstrapOptions = {}): P
     electronCredentialCipher,
   );
   await config.initialize();
+  const auth = new DesktopAuthController({ config, openExternal: (url) => shell.openExternal(url) });
   const runner = options.createRunnerController
     ? await options.createRunnerController(config)
     : new ExistingRunnerAdapter(config, app.getPath("userData"));
@@ -87,7 +89,7 @@ export async function launchDesktopApp(options: DesktopBootstrapOptions = {}): P
     },
   });
   const rendererRoot = path.join(app.getAppPath(), "dist", "client");
-  installDesktopProtocol({ rendererRoot, getApiBaseUrl: () => config.getSettings().apiBaseUrl });
+  installDesktopProtocol({ rendererRoot, getApiBaseUrl: () => config.getSettings().apiBaseUrl, auth });
 
   const preload = path.join(app.getAppPath(), "dist-desktop", "preload.cjs");
   const window = new BrowserWindow({
@@ -144,12 +146,13 @@ export async function launchDesktopApp(options: DesktopBootstrapOptions = {}): P
       showWindow();
       sendDesktopNavigation(window, { path: "/research/schedules" });
     },
-    startRunner: safely(() => runner.start()),
-    pauseRunner: safely(() => runner.pauseAfterCurrent()),
-    resumeRunner: safely(() => runner.resume()),
-    runNext: safely(() => runner.runNext()),
+    startRunner: safely(async () => { await auth.requireOwner(); return runner.start(); }),
+    pauseRunner: safely(async () => { await auth.requireOwner(); return runner.pauseAfterCurrent(); }),
+    resumeRunner: safely(async () => { await auth.requireOwner(); return runner.resume(); }),
+    runNext: safely(async () => { await auth.requireOwner(); return runner.runNext(); }),
     setLaunchAtStartup: async (enabled) => {
       try {
+        await auth.requireOwner();
         const settings = await updateStartup(enabled);
         tray.updateSettings(settings);
       } catch (error) {
@@ -164,6 +167,7 @@ export async function launchDesktopApp(options: DesktopBootstrapOptions = {}): P
     runner,
     updates,
     config,
+    auth,
     devServerUrl: developmentUrl,
     showWindow,
     quit,
@@ -192,6 +196,7 @@ export async function launchDesktopApp(options: DesktopBootstrapOptions = {}): P
     isQuitting = true;
   });
   app.once("will-quit", () => {
+    auth.cancel();
     unregisterIpc();
     unsubscribeTrayStatus();
     tray.destroy();

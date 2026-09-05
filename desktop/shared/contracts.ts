@@ -68,8 +68,24 @@ export interface RunnerDeviceSummary {
 }
 
 export interface RunnerEnrollmentRequest {
-  ownerToken: string;
+  ownerToken?: string;
   name: string;
+}
+
+export interface DesktopAuthUser {
+  id: string;
+  email: string;
+  name: string | null;
+  role: "owner" | "researcher" | "viewer";
+}
+
+export interface DesktopAuthStatus {
+  mode: "legacy" | "google";
+  configured: boolean;
+  authenticated: boolean;
+  user?: DesktopAuthUser;
+  phase: "idle" | "opening" | "waiting" | "error";
+  error?: string;
 }
 
 export interface RunnerEnrollmentResult {
@@ -77,6 +93,10 @@ export interface RunnerEnrollmentResult {
 }
 
 export const IPC_CHANNELS = {
+  authStatus: "desktop:auth-status",
+  authSignIn: "desktop:auth-sign-in",
+  authCancel: "desktop:auth-cancel",
+  authSignOut: "desktop:auth-sign-out",
   appInfo: "desktop:app-info",
   appShow: "desktop:app-show",
   appQuit: "desktop:app-quit",
@@ -105,6 +125,13 @@ export const IPC_CHANNELS = {
 } as const;
 
 export interface SloppyPotatoDesktopApi {
+  /** Authentication credentials never cross this bridge into the renderer. */
+  auth?: {
+    status(): Promise<DesktopAuthStatus>;
+    signIn(): Promise<DesktopAuthStatus>;
+    cancel(): Promise<DesktopAuthStatus>;
+    signOut(): Promise<DesktopAuthStatus>;
+  };
   app: {
     info(): Promise<DesktopAppInfo>;
     show(): Promise<void>;

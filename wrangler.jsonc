@@ -3,6 +3,11 @@
 	"name": "sloppy-potato-fantasy-football",
 	"compatibility_date": "2026-09-01",
 	"main": "./worker/index.ts",
+	"vars": {
+		"AUTH_MODE": "legacy",
+		"APP_BASE_URL": "https://sloppy-potato-fantasy-football.therealryansmith.workers.dev",
+		"OWNER_GOOGLE_EMAIL": "therealryansmith@gmail.com"
+	},
 	"assets": {
 		"not_found_handling": "single-page-application",
 		"run_worker_first": [

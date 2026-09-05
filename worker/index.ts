@@ -3,6 +3,8 @@ import { drizzle } from "drizzle-orm/d1";
 import { Hono } from "hono";
 import { createMiddleware } from "hono/factory";
 import { z } from "zod";
+import { AuthError, googleMode, personalIdentity, registerGoogleAuth, type AuthBindings, type AuthVariables } from "./services/google-auth";
+import { PublisherError, listPublishers, updatePublisher, savePublisherPreferences, publisherQueryInput, updatePublisherInput, publisherPreferencesInput } from "./services/publishers";
 import {
   leagueMembers,
   leagues,
@@ -81,7 +83,7 @@ import {
   type AuthenticatedRunnerCredential,
 } from "./services/runner-credentials";
 
-type Bindings = {
+type Bindings = AuthBindings & {
   DB: D1Database;
   SLEEPER_API_BASE_URL?: string;
   IMPORT_ADMIN_TOKEN?: string;
@@ -93,13 +95,15 @@ type RunnerAuthorization =
   | ({ kind: "device" } & AuthenticatedRunnerCredential)
   | { kind: "legacy"; credentialId: null; ownerIdentity: "primary-owner"; deviceId: null; name: null };
 
-type Variables = { runnerAuthorization?: RunnerAuthorization };
+type Variables = AuthVariables & { runnerAuthorization?: RunnerAuthorization };
 
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
+registerGoogleAuth(app);
 const sleeperImportInput = z.object({
   leagueId: z.string().trim().regex(/^\d{5,30}$/, "Enter a numeric Sleeper league ID"),
 });
 const requireImportToken = createMiddleware<{ Bindings: Bindings }>(async (context, next) => {
+  if (googleMode(context.env)) return next(); // Google middleware has already enforced role and CSRF.
   const hostname = new URL(context.req.url).hostname;
   const isLocal = ["localhost", "127.0.0.1", "0.0.0.0", "::1"].includes(hostname);
   const configuredToken = context.env.IMPORT_ADMIN_TOKEN;
@@ -121,6 +125,7 @@ function isLocalRequest(url: string) {
 }
 
 const requireResearchOwner = createMiddleware<{ Bindings: Bindings }>(async (context, next) => {
+  if (googleMode(context.env)) return next(); // Google middleware replaces shared owner credentials.
   const configuredToken = context.env.RESEARCH_OWNER_TOKEN;
   if (!configuredToken && isLocalRequest(context.req.url)) return next();
   if (!configuredToken) {
@@ -139,7 +144,7 @@ const requireResearchOwner = createMiddleware<{ Bindings: Bindings }>(async (con
 
 const requireAgentRunner = createMiddleware<{ Bindings: Bindings; Variables: Variables }>(async (context, next) => {
   const configuredToken = context.env.AGENT_RUNNER_TOKEN;
-  if (!configuredToken && isLocalRequest(context.req.url)) return next();
+  if (!configuredToken && !googleMode(context.env) && isLocalRequest(context.req.url)) return next();
   const supplied = context.req.header("Authorization")?.replace(/^Bearer\s+/i, "").trim();
 
   // Keep the original shared secret working during migration. Newly enrolled
@@ -182,6 +187,8 @@ app.use("/api/imports/*", requireImportToken);
 app.use("/api/leagues/:leagueId/sync", requireImportToken);
 app.use("/api/research/*", requireResearchOwner);
 app.use("/api/runners/*", requireAgentRunner);
+app.use("/api/publishers/*", requireResearchOwner);
+app.use("/api/publishers", requireResearchOwner);
 
 function database(context: { env: Bindings }) {
   return drizzle(context.env.DB, { schema });
@@ -232,7 +239,7 @@ app.get("/api/sleepers/latest", async (context) => {
   const value = context.req.query("leagueSize");
   const leagueSize = rankingLeagueSize.optional().safeParse(value === undefined ? undefined : Number(value));
   if (!leagueSize.success) return context.json({ error: "invalid_request", message: "Invalid league size" }, 400);
-  return context.json({ report: await getLatestSleeperReport(database(context), leagueSize.data) });
+  return context.json({ report: await getLatestSleeperReport(database(context), leagueSize.data, personalIdentity(context.get("authUser"))) });
 });
 
 app.get("/api/sleepers/reports", async (context) => {
@@ -240,7 +247,7 @@ app.get("/api/sleepers/reports", async (context) => {
   const query = z.object({ limit: z.coerce.number().int().min(1).max(50).default(50), researchJobId: z.string().uuid().optional(), leagueSize: rankingLeagueSize.optional() })
     .safeParse({ limit: context.req.query("limit"), researchJobId: context.req.query("researchJobId"), leagueSize: leagueSizeValue === undefined ? undefined : Number(leagueSizeValue) });
   if (!query.success) return context.json({ error: "invalid_request", message: query.error.issues[0]?.message ?? "Invalid report filters" }, 400);
-  return context.json({ reports: await getSleeperReports(database(context), query.data.limit, query.data.researchJobId, query.data.leagueSize) });
+  return context.json({ reports: await getSleeperReports(database(context), query.data.limit, query.data.researchJobId, query.data.leagueSize, personalIdentity(context.get("authUser"))) });
 });
 
 app.post("/api/imports/sleeper", async (context) => {
@@ -431,7 +438,7 @@ app.get("/api/rankings/snapshots", async (context) => {
       400,
     );
   }
-  return context.json({ snapshots: await getRankingSnapshots(database(context), limit, query.data) });
+  return context.json({ snapshots: await getRankingSnapshots(database(context), limit, query.data, personalIdentity(context.get("authUser"))) });
 });
 
 app.get("/api/rankings/sources", async (context) => {
@@ -441,6 +448,24 @@ app.get("/api/rankings/sources", async (context) => {
     : 100;
   const after = context.req.query("after")?.trim().toLowerCase();
   return context.json(await getRankingSourceCatalog(database(context), { limit, after }));
+});
+
+app.get("/api/publishers", async (context) => {
+  const input = publisherQueryInput.safeParse(context.req.query());
+  if (!input.success) return context.json({ error: "invalid_request", message: input.error.issues[0]?.message ?? "Invalid publisher filters" }, 400);
+  return context.json({ publishers: await listPublishers(database(context), personalIdentity(context.get("authUser")), input.data) });
+});
+
+app.patch("/api/publishers/:id", async (context) => {
+  const input = updatePublisherInput.safeParse(await context.req.json().catch(() => null));
+  if (!input.success) return context.json({ error: "invalid_request", message: input.error.issues[0]?.message ?? "Invalid publisher change" }, 400);
+  return context.json({ publisher: await updatePublisher(database(context), context.req.param("id"), input.data) });
+});
+
+app.put("/api/publishers/:id/preferences", async (context) => {
+  const input = publisherPreferencesInput.safeParse(await context.req.json().catch(() => null));
+  if (!input.success) return context.json({ error: "invalid_request", message: input.error.issues[0]?.message ?? "Invalid publisher preference" }, 400);
+  return context.json({ publisher: await savePublisherPreferences(database(context), context.req.param("id"), personalIdentity(context.get("authUser")), input.data) });
 });
 
 app.post("/api/rankings/sources/resolve", requireImportToken, async (context) => {
@@ -507,6 +532,10 @@ app.post("/api/research/jobs", async (context) => {
     input.data,
     suppliedIdempotencyKey ?? crypto.randomUUID(),
   );
+  const user = context.get("authUser");
+  if (result.created && user) {
+    await context.env.DB.prepare("UPDATE research_job_events SET actor_type = 'user', actor_id = ? WHERE job_id = ? AND event_type = 'queued'").bind(user.id, result.job.id).run();
+  }
   return context.json({ job: result.job }, result.created ? 201 : 200);
 });
 
@@ -568,7 +597,7 @@ app.get("/api/research/personal-rankings", async (context) => {
       400,
     );
   }
-  return context.json({ board: await getPersonalRankingBoard(database(context), input.data) });
+  return context.json({ board: await getPersonalRankingBoard(database(context), input.data, personalIdentity(context.get("authUser"))) });
 });
 
 app.put("/api/research/personal-rankings", async (context) => {
@@ -579,7 +608,7 @@ app.put("/api/research/personal-rankings", async (context) => {
       400,
     );
   }
-  return context.json(await savePersonalRankingBoard(database(context), input.data));
+  return context.json(await savePersonalRankingBoard(database(context), input.data, personalIdentity(context.get("authUser"))));
 });
 
 app.post("/api/research/schedules", async (context) => {
@@ -677,6 +706,8 @@ app.post("/api/runners/jobs/:jobId/fail", async (context) => {
 });
 
 app.onError((error, context) => {
+  if (error instanceof AuthError) return context.json({ error: error.code, message: error.message }, error.status);
+  if (error instanceof PublisherError) return context.json({ error: error.code, message: error.message }, error.code === "not_found" ? 404 : 409);
   console.error("request_failed", {
     path: context.req.path,
     error: error instanceof Error ? error.message : String(error),

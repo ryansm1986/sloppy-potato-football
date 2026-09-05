@@ -2,6 +2,7 @@ import { Bot, Clock3, KeyRound, LoaderCircle, Pause, Play, Power, RefreshCw, Sea
 import { useEffect, useRef, useState } from "react";
 import type { DesktopSettings, RunnerLogEntry, RunnerStatus } from "../../../desktop/shared/contracts";
 import { readOwnerTokenFromEnvironmentFile } from "./owner-token-file";
+import { useAuth } from "../auth/AuthProvider";
 
 type DesktopRunnerControlsProps = {
   ownerToken?: string;
@@ -34,6 +35,8 @@ function mergeLogs(current: RunnerLogEntry[], incoming: RunnerLogEntry[]): Runne
 }
 
 export default function DesktopRunnerControls({ ownerToken = "" }: DesktopRunnerControlsProps) {
+  const auth = useAuth();
+  const googleOwner = auth.mode === "google" && auth.authenticated && auth.user?.role === "owner";
   const desktop = window.sloppyPotatoDesktop;
   const [status, setStatus] = useState<RunnerStatus | null>(null);
   const [logs, setLogs] = useState<RunnerLogEntry[]>([]);
@@ -150,13 +153,13 @@ export default function DesktopRunnerControls({ ownerToken = "" }: DesktopRunner
   }
 
   async function enrollRunner() {
-    if (!effectiveOwnerToken || !deviceName.trim()) return;
+    if ((!googleOwner && !effectiveOwnerToken) || !deviceName.trim()) return;
     setBusy("enroll");
     setError(null);
     setNotice(null);
     try {
       const result = await desktopApi.credentials.enrollRunner({
-        ownerToken: effectiveOwnerToken,
+        ...(googleOwner ? {} : { ownerToken: effectiveOwnerToken }),
         name: deviceName.trim(),
       });
       setOwnerTokenDraft("");
@@ -227,20 +230,20 @@ export default function DesktopRunnerControls({ ownerToken = "" }: DesktopRunner
         <div className="desktop-token-setup">
           <p><KeyRound size={13} /> Enroll this computer with your owner access. The new device credential is encrypted by Windows and is never shown to the page.</p>
           <label><span>Computer name</span><input aria-label="Computer name" value={deviceName} maxLength={100} onChange={(event) => setDeviceName(event.target.value)} /></label>
-          <label><span>{ownerToken.trim() ? "Use a different owner token (optional)" : "Owner token"}</span><input aria-label="Owner token" type="password" value={ownerTokenDraft} onChange={(event) => setOwnerTokenDraft(event.target.value)} placeholder={ownerToken.trim() ? "Saved owner access will be used" : "Paste RESEARCH_OWNER_TOKEN"} autoComplete="off" /></label>
-          {ownerToken.trim() ? (
+          {!googleOwner && <label><span>{ownerToken.trim() ? "Use a different owner token (optional)" : "Owner token"}</span><input aria-label="Owner token" type="password" value={ownerTokenDraft} onChange={(event) => setOwnerTokenDraft(event.target.value)} placeholder={ownerToken.trim() ? "Saved owner access will be used" : "Paste RESEARCH_OWNER_TOKEN"} autoComplete="off" /></label>}
+          {googleOwner ? <p className="desktop-token-feedback is-ready">Your signed-in owner account will securely enroll this computer. No token to copy.</p> : ownerToken.trim() ? (
             <p className="desktop-token-feedback is-ready" role="status"><KeyRound size={12} /> Saved owner access from Settings is ready. The token remains hidden.</p>
           ) : !ownerTokenDraft.trim() ? (
             <p className="desktop-token-feedback">Enter an owner token here or save one under Access &amp; security to continue.</p>
           ) : null}
-          {!ownerToken.trim() && (
+          {!googleOwner && !ownerToken.trim() && (
             <div className="desktop-owner-token-import">
               <input ref={ownerTokenFileInput} aria-label="Choose .env.runner file" hidden type="file" onChange={(event) => { void importOwnerToken(event.target.files?.[0]); }} />
               <button type="button" disabled={busy !== null} onClick={() => ownerTokenFileInput.current?.click()}><KeyRound size={13} /> Load existing .env.runner</button>
               <span>Already have a legacy setup file? Import it here. New owner access is managed above.</span>
             </div>
           )}
-          <button className="button button--primary" type="button" disabled={!effectiveOwnerToken || !deviceName.trim() || busy !== null} onClick={() => { void enrollRunner(); }}>{busy === "enroll" ? <LoaderCircle className="spin" size={13} /> : <KeyRound size={13} />} {busy === "enroll" ? "Setting up…" : "Set up this computer"}</button>
+          <button className="button button--primary" type="button" disabled={(!googleOwner && !effectiveOwnerToken) || !deviceName.trim() || busy !== null} onClick={() => { void enrollRunner(); }}>{busy === "enroll" ? <LoaderCircle className="spin" size={13} /> : <KeyRound size={13} />} {busy === "enroll" ? "Setting up…" : "Set up this computer"}</button>
           {busy === "enroll" && <p className="desktop-token-feedback is-pending" role="status">Creating and securing this computer's runner credential…</p>}
           {error && <p className="research-error desktop-token-error" role="alert">{error}</p>}
           <details className="desktop-manual-token"><summary>Use an existing runner token instead</summary><label><span>Runner token</span><input aria-label="Desktop runner token" type="password" value={tokenDraft} onChange={(event) => setTokenDraft(event.target.value)} placeholder="Paste scoped runner token" autoComplete="off" /></label><button type="button" disabled={!tokenDraft.trim() || busy !== null} onClick={() => { void saveToken(); }}>{busy === "token" ? <LoaderCircle className="spin" size={13} /> : <KeyRound size={13} />} Secure and start</button></details>

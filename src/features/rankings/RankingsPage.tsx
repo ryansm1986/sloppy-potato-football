@@ -57,11 +57,13 @@ import {
 } from "../league-size";
 import {
   fetchResearchJobs,
-  RESEARCH_OWNER_TOKEN_KEY,
   type ResearchJob,
 } from "../research/research-api";
 import { fetchAgentRankings, type AgentRankingSnapshot } from "./agent-api";
 import { ResearchRunHistory } from "./ResearchRunHistory";
+import { useResearchOwnerAccess } from "../research/useResearchOwnerAccess";
+import { accountStorage } from "../auth/account-storage";
+import { savePublisherPreferences } from "../publishers/publishers-api";
 import { groupRankingRuns } from "./ranking-history";
 import { fetchFantasyPlayerCatalog, type CanonicalFantasyPlayer } from "./player-api";
 import {
@@ -428,7 +430,7 @@ function AgentSnapshotPanel({
     ...linkedSnapshots.filter((item) => !currentSnapshots.some((current) => current.id === item.id)),
   ]), [currentSnapshots, linkedSnapshots]);
   const snapshots = selectedRunId ? runs.find((run) => run.id === selectedRunId)?.snapshots ?? [] : currentSnapshots;
-  const excludedAggregateSourceKeys = selectedRunId ? historyExcludedSourceKeys : currentExcludedSourceKeys;
+  const excludedAggregateSourceKeys = selectedRunId ? historyExcludedSourceKeys : [...currentExcludedSourceKeys, ...currentSnapshots.filter((snapshot) => snapshot.source.blocked || snapshot.source.excluded).map((snapshot) => snapshot.source.canonicalKey)];
   function onToggleAggregateSource(key: string) {
     if (selectedRunId) setHistoryExcludedSourceKeys((current) => toggleAggregateSource(current, key));
     else onToggleCurrentAggregateSource(key);
@@ -670,6 +672,7 @@ function AgentSnapshotPanel({
                   <div className={`source-chip${active ? " is-active" : ""}`} key={snapshot.source.canonicalKey}>
                     <button type="button" aria-pressed={active} onClick={() => selectSource(snapshot)}>
                       {snapshot.source.name}
+                      {snapshot.source.blocked && <span className="ranking-individual-only-badge">Now blocked</span>}
                       {isLatestRunDiscovery(snapshot) && <span className="ranking-new-source-badge">New source</span>}
                       {!aggregateEligible && <span className="ranking-individual-only-badge">Individual only</span>}
                     </button>
@@ -680,6 +683,7 @@ function AgentSnapshotPanel({
                         aria-label={`${includedInAggregate ? "Remove" : "Include"} ${snapshot.source.name} ${includedInAggregate ? "from" : "in"} aggregate`}
                         aria-pressed={includedInAggregate}
                         title={includedInAggregate ? "Included in aggregate" : "Excluded from aggregate"}
+                        disabled={!selectedRunId && snapshot.source.blocked}
                         onClick={() => onToggleAggregateSource(snapshot.source.canonicalKey)}
                       >
                         {includedInAggregate ? <CircleMinus size={12} /> : <CirclePlus size={12} />}
@@ -797,9 +801,11 @@ function AgentSnapshotPanel({
 }
 
 export default function RankingsPage() {
+  const { ownerToken, google, canRead, canResearch, userId } = useResearchOwnerAccess();
+  const rankingsStorage = useMemo(() => accountStorage(window.localStorage, google ? userId : undefined), [google, userId]);
   const [pageSearchParams, setPageSearchParams] = useSearchParams();
   const initialSavedRankings = useRef<RankingPlayer[] | null>(
-    typeof window === "undefined" ? null : loadSavedPersonalRankings(window.localStorage),
+    typeof window === "undefined" ? null : loadSavedPersonalRankings(rankingsStorage),
   );
   const [rankings, setRankings] = useState<RankingPlayer[]>(() => initialSavedRankings.current ?? starterRankings);
   const [query, setQuery] = useState("");
@@ -817,18 +823,17 @@ export default function RankingsPage() {
   const [catalogReload, setCatalogReload] = useState(0);
   const [catalogHydrated, setCatalogHydrated] = useState(false);
   const [researchJobs, setResearchJobs] = useState<ResearchJob[]>([]);
-  const ownerToken = typeof window === "undefined" ? "" : window.localStorage.getItem(RESEARCH_OWNER_TOKEN_KEY)?.trim() ?? "";
   const [pendingCopy, setPendingCopy] = useState<{ snapshot: AgentRankingSnapshot; position: string } | null>(null);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
   const [cloudBoard, setCloudBoard] = useState<CloudPersonalRankingBoard | null>(null);
-  const [cloudBoardLoaded, setCloudBoardLoaded] = useState(!ownerToken);
+  const [cloudBoardLoaded, setCloudBoardLoaded] = useState(!canRead);
   const [cloudBoardError, setCloudBoardError] = useState<string | null>(null);
   const [cloudSaving, setCloudSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportStatus, setExportStatus] = useState<{ message: string; error: boolean } | null>(null);
   const [pendingRankMove, setPendingRankMove] = useState<{ playerId: string; rank: string } | null>(null);
   const [preferences, setPreferences] = useState<RankingsPreferences>(() =>
-    typeof window === "undefined" ? loadRankingsPreferences({ getItem: () => null }) : loadRankingsPreferences(window.localStorage));
+    typeof window === "undefined" ? loadRankingsPreferences({ getItem: () => null }) : loadRankingsPreferences(rankingsStorage));
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 180, tolerance: 6 } }),
@@ -841,12 +846,12 @@ export default function RankingsPage() {
 
   useEffect(() => {
     if (!catalogHydrated) return;
-    savePersonalRankings(window.localStorage, rankings);
+    savePersonalRankings(rankingsStorage, rankings);
     setSavedAt(new Date());
   }, [catalogHydrated, rankings]);
 
   useEffect(() => {
-    saveRankingsPreferences(window.localStorage, preferences);
+    saveRankingsPreferences(rankingsStorage, preferences);
   }, [preferences]);
 
   useEffect(() => {
@@ -882,16 +887,16 @@ export default function RankingsPage() {
   }, [leagueSize]);
 
   useEffect(() => {
-    if (!ownerToken) return;
+    if (!canResearch) return;
     const controller = new AbortController();
     void fetchResearchJobs(ownerToken, controller.signal, 100)
       .then(setResearchJobs)
       .catch(() => setResearchJobs([]));
     return () => controller.abort();
-  }, [ownerToken]);
+  }, [ownerToken, canResearch]);
 
   useEffect(() => {
-    if (!ownerToken) {
+    if (!canRead) {
       setCloudBoard(null);
       setCloudBoardLoaded(true);
       setCloudBoardError(null);
@@ -908,7 +913,7 @@ export default function RankingsPage() {
       })
       .finally(() => { if (!controller.signal.aborted) setCloudBoardLoaded(true); });
     return () => controller.abort();
-  }, [ownerToken]);
+  }, [ownerToken, canRead]);
 
   const researchByPlayer = useMemo(() => {
     const byPlayer = new Map<string, ResearchJob>();
@@ -921,7 +926,7 @@ export default function RankingsPage() {
   }, [researchJobs]);
 
   const currentAggregateEntries = useMemo(
-    () => aggregateRankingSnapshots(snapshots, preferences.excludedAggregateSourceKeys)?.entries ?? [],
+    () => aggregateRankingSnapshots(snapshots.filter((snapshot) => !snapshot.source.blocked && !snapshot.source.excluded), preferences.excludedAggregateSourceKeys)?.entries ?? [],
     [preferences.excludedAggregateSourceKeys, snapshots],
   );
 
@@ -941,6 +946,7 @@ export default function RankingsPage() {
     try {
       const nextSnapshots = await fetchAgentRankings(signal, leagueSize);
       setSnapshots(nextSnapshots.filter((snapshot) => normalizeLeagueSize(snapshot.leagueSize) === leagueSize));
+      if (google) setPreferences((current) => ({ ...current, favoriteSourceKeys: [...new Set(nextSnapshots.filter((snapshot) => snapshot.source.favorite).map((snapshot) => snapshot.source.canonicalKey))], excludedAggregateSourceKeys: [...new Set(nextSnapshots.filter((snapshot) => snapshot.source.excluded).map((snapshot) => snapshot.source.canonicalKey))] }));
     } catch (error: unknown) {
       if (error instanceof DOMException && error.name === "AbortError") return;
       setSnapshotError(error instanceof Error ? error.message : "Unknown ranking error");
@@ -1033,7 +1039,7 @@ export default function RankingsPage() {
   async function saveBoard() {
     savePersonalRankings(window.localStorage, rankings);
     setSavedAt(new Date());
-    if (!ownerToken) {
+    if (!canRead) {
       setAnnouncement("Saved your personal rankings on this device. Add owner access in Settings to sync them across devices.");
       return;
     }
@@ -1068,7 +1074,7 @@ export default function RankingsPage() {
         snapshots,
         leagueSize,
         favoriteSourceKeys: preferences.favoriteSourceKeys,
-        excludedAggregateSourceKeys: preferences.excludedAggregateSourceKeys,
+        excludedAggregateSourceKeys: [...new Set([...preferences.excludedAggregateSourceKeys, ...snapshots.filter((snapshot) => snapshot.source.blocked || snapshot.source.excluded).map((snapshot) => snapshot.source.canonicalKey)])],
       });
       setExportStatus({ message: `Exported ${filename}`, error: false });
     } catch (error: unknown) {
@@ -1086,6 +1092,11 @@ export default function RankingsPage() {
   }
 
   function toggleSource(sourceKey: string) {
+    const source = snapshots.find((snapshot) => snapshot.source.canonicalKey === sourceKey)?.source;
+    if (google && source?.publisherId) {
+      void savePublisherPreferences(ownerToken, source.publisherId, { favorite: !source.favorite }).then(() => loadAgentSnapshots()).catch((cause: unknown) => setSnapshotError(cause instanceof Error ? cause.message : "Could not save publisher preference."));
+      return;
+    }
     setPreferences((current) => ({
       ...current,
       favoriteSourceKeys: toggleFavoriteSource(current.favoriteSourceKeys, sourceKey),
@@ -1093,6 +1104,11 @@ export default function RankingsPage() {
   }
 
   function toggleSourceInAggregate(sourceKey: string) {
+    const source = snapshots.find((snapshot) => snapshot.source.canonicalKey === sourceKey)?.source;
+    if (google && source?.publisherId) {
+      void savePublisherPreferences(ownerToken, source.publisherId, { excluded: !source.excluded }).then(() => loadAgentSnapshots()).catch((cause: unknown) => setSnapshotError(cause instanceof Error ? cause.message : "Could not save publisher preference."));
+      return;
+    }
     setPreferences((current) => ({
       ...current,
       excludedAggregateSourceKeys: toggleAggregateSource(current.excludedAggregateSourceKeys, sourceKey),
@@ -1100,6 +1116,11 @@ export default function RankingsPage() {
   }
 
   function restoreAggregateSources(sourceKeys: string[]) {
+    if (google) {
+      const publisherIds = [...new Set(snapshots.filter((snapshot) => sourceKeys.includes(snapshot.source.canonicalKey) && snapshot.source.publisherId).map((snapshot) => snapshot.source.publisherId!))];
+      void Promise.all(publisherIds.map((id) => savePublisherPreferences(ownerToken, id, { excluded: false }))).then(() => loadAgentSnapshots()).catch((cause: unknown) => setSnapshotError(cause instanceof Error ? cause.message : "Could not restore publisher preferences."));
+      return;
+    }
     const currentScopeKeys = new Set(sourceKeys);
     setPreferences((current) => ({
       ...current,
@@ -1190,7 +1211,7 @@ export default function RankingsPage() {
         favoriteSourceKeys={preferences.favoriteSourceKeys}
         excludedAggregateSourceKeys={preferences.excludedAggregateSourceKeys}
         researchByPlayer={researchByPlayer}
-        hasOwnerToken={Boolean(ownerToken)}
+        hasOwnerToken={canResearch}
         onCollapsedChange={(agentCollapsed) => updatePreferences({ agentCollapsed })}
         onRefresh={() => { void loadAgentSnapshots(); }}
         onToggleFavorite={toggleSource}

@@ -1,3 +1,4 @@
+import { apiFetch } from "../auth/auth-api";
 import { ResearchApiError } from "../research/research-api";
 import type { RankingPlayer } from "./ranking-store";
 
@@ -41,7 +42,7 @@ export async function fetchCloudPersonalRankings(
   signal?: AbortSignal,
 ): Promise<CloudPersonalRankingBoard | null> {
   const query = new URLSearchParams({ season, scoringFormat: "ppr", rankingType: "redraft" });
-  const response = await fetch(`/api/research/personal-rankings?${query}`, {
+  const response = await apiFetch(`/api/research/personal-rankings?${query}`, {
     headers: headers(token),
     signal,
   });
@@ -55,7 +56,7 @@ export async function saveCloudPersonalRankings(
   playerIds: string[],
   options: { revision?: number | null; season?: string; leagueSize?: number } = {},
 ): Promise<SavePersonalRankingBoardResult> {
-  const response = await fetch("/api/research/personal-rankings", {
+  const response = await apiFetch("/api/research/personal-rankings", {
     method: "PUT",
     headers: headers(token, true),
     body: JSON.stringify({

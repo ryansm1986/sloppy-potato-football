@@ -18,10 +18,10 @@ import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState }
 import { Link, useSearchParams } from "react-router";
 import { ResearchRunHistory, type ResearchRunOption } from "../rankings/ResearchRunHistory";
 import SourceTargetField from "../research/SourceTargetField";
+import { useResearchOwnerAccess } from "../research/useResearchOwnerAccess";
 import { LEAGUE_SIZE_OPTIONS, loadLeagueSize, normalizeLeagueSize, saveLeagueSize } from "../league-size";
 import {
   isLocalDevelopment,
-  RESEARCH_OWNER_TOKEN_KEY,
 } from "../research/research-api";
 import {
   fetchLatestSleeperReport,
@@ -34,10 +34,6 @@ import {
 } from "./sleepers-api";
 
 const MAX_REPORT_POLL_ATTEMPTS = 60;
-
-function loadOwnerToken(): string {
-  return window.localStorage.getItem(RESEARCH_OWNER_TOKEN_KEY) ?? "";
-}
 
 function formatFreshness(value: string): string {
   const timestamp = Date.parse(value);
@@ -107,7 +103,7 @@ function CandidateCard({ candidate, rank }: { candidate: SleeperCandidate; rank:
                 <a href={source.url} target="_blank" rel="noreferrer" key={`${source.url}-${source.title}`}>
                   <ExternalLink size={13} />
                   <span>
-                    <strong>{source.publisher}{source.isNewDiscovery && <span className="sleeper-source-new">New source</span>}</strong>
+                    <strong>{source.publisher}{source.blocked && <span className="sleeper-source-new">Now blocked</span>}{source.isNewDiscovery && <span className="sleeper-source-new">New source</span>}</strong>
                     <small>{source.title}{source.publishedAt ? ` \u00b7 ${new Date(source.publishedAt).toLocaleDateString()}` : ""}</small>
                     {source.recommendation && <em>{source.recommendation}</em>}
                   </span>
@@ -162,8 +158,8 @@ export default function SleepersPage({ localDevelopmentOverride }: { localDevelo
   const [discoverNewSources, setDiscoverNewSources] = useState(true);
   const [pollBaseline, setPollBaseline] = useState<{ id: string | null; generatedAt: number } | null>(null);
   const tabRefs = useRef<Partial<Record<SleeperPosition, HTMLButtonElement | null>>>({});
-  const ownerToken = loadOwnerToken();
-  const ownerReady = localDevelopment || Boolean(ownerToken);
+  const { ownerToken, google, canResearch } = useResearchOwnerAccess();
+  const ownerReady = google ? canResearch : localDevelopment || Boolean(ownerToken);
 
   const loadReport = useCallback(async (signal?: AbortSignal) => {
     setIsLoading(true);
@@ -346,7 +342,7 @@ export default function SleepersPage({ localDevelopmentOverride }: { localDevelo
               <div><p className="eyebrow">Ranked by source recommendations</p><h2>{activePosition} sleepers</h2></div>
               {report && <span>{candidates.length} researched players</span>}
             </div>
-            {report?.positionSummaries?.[activePosition] && <p className="sleeper-position-summary">{report.positionSummaries[activePosition]}</p>}
+            {report?.positionSummaries?.[activePosition] && <><p className="sleeper-position-summary">{report.positionSummaries[activePosition]}</p><small className="agent-caption">Original research summary and draft windows. {selectedRunId ? "Historical evidence counts are preserved as researched." : "Current evidence counts reflect your publisher exclusions and owner blocks."}</small></>}
 
             {isLoading || (historyLoading && selectedRunId && !report) ? (
               <div className="sleeper-state"><LoaderCircle className="spin" size={24} /><h3>Loading sleeper board</h3><p>Checking the latest published research.</p></div>
@@ -366,7 +362,7 @@ export default function SleepersPage({ localDevelopmentOverride }: { localDevelo
 
         <aside className="sleepers-side">
           <section className="panel sleeper-refresh-card">
-            <header><div className="research-callout__icon"><Bot size={18} /></div><div><p className="eyebrow">Owner research control</p><h2>Refresh the board</h2></div></header>
+            <header><div className="research-callout__icon"><Bot size={18} /></div><div><p className="eyebrow">{google ? "Research control" : "Owner research control"}</p><h2>Refresh the board</h2></div></header>
             <p>Send one bounded assignment to your runner for current PPR redraft recommendations and direct source evidence.</p>
             <div className="sleeper-refresh-fields">
               <label><span>League size</span><select aria-label="League size" value={leagueSize} onChange={(event) => {
@@ -392,7 +388,7 @@ export default function SleepersPage({ localDevelopmentOverride }: { localDevelo
               {isSubmitting ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />} Research sleepers
             </button>
             {!ownerReady && <p className="sleeper-owner-lock"><KeyRound size={13} /> Only the owner can dispatch the local runner. <Link to="/research">Add owner access</Link>.</p>}
-            {ownerReady && <small><CheckCircle2 size={12} /> Owner access found on this browser</small>}
+            {ownerReady && <small><CheckCircle2 size={12} /> {google ? "Research access verified" : "Owner access found on this browser"}</small>}
             {notice && <p className="research-notice" role="status">{notice}</p>}
           </section>
 

@@ -25,9 +25,9 @@ function outputLink(job: AgentJob) {
 }
 
 export default function AgentDashboardPage({ localDevelopmentOverride }: { localDevelopmentOverride?: boolean } = {}) {
-  const { ownerToken } = useResearchOwnerAccess();
+  const { ownerToken, google, isOwner } = useResearchOwnerAccess();
   const [params, setParams] = useSearchParams();
-  const allowed = (localDevelopmentOverride ?? isLocalDevelopment()) || !!ownerToken;
+  const allowed = google ? isOwner : (localDevelopmentOverride ?? isLocalDevelopment()) || !!ownerToken;
   const [data, setData] = useState<AgentDashboard | null>(null);
   const [draft, setDraft] = useState<AgentResearchSettings | null>(null);
   const [query, setQuery] = useState("");

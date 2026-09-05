@@ -53,6 +53,34 @@ describe("SecureConfigStore", () => {
     expect(restored.getInstallationId()).toBe(first.getInstallationId());
   });
 
+  it("restores origin-bound encrypted app sessions independently from runner credentials", async () => {
+    const file = new MemoryFile();
+    const store = new SecureConfigStore(file, testCipher);
+    await store.initialize();
+    const token = "sp_session_" + "a".repeat(40);
+    await store.setAppSessionToken(token, "https://app.example");
+    await store.setRunnerToken("r".repeat(40));
+    expect(file.value).not.toContain(token);
+    expect(JSON.stringify(store.getSettings())).not.toContain(token);
+    const restored = new SecureConfigStore(file, testCipher);
+    await restored.initialize();
+    expect(restored.getAppSessionToken("https://app.example/")).toBe(token);
+    expect(restored.getAppSessionToken("https://other.example")).toBeUndefined();
+    await restored.clearAppSessionToken();
+    expect(restored.getRunnerToken()).toBe("r".repeat(40));
+    expect(restored.getAppSessionToken("https://app.example")).toBeUndefined();
+  });
+
+  it("refuses plaintext app-session storage when encryption is unavailable", async () => {
+    const file = new MemoryFile();
+    const store = new SecureConfigStore(file, { isAvailable: () => false, encrypt: () => "", decrypt: () => "" });
+    await store.initialize();
+    const token = "sp_session_" + "s".repeat(40);
+    await expect(store.setAppSessionToken(token, "https://app.example")).rejects.toThrow(/unavailable/);
+    expect(file.value).not.toContain(token);
+    expect(store.getAppSessionToken("https://app.example")).toBeUndefined();
+  });
+
   it("refuses to persist secrets when OS encryption is unavailable", async () => {
     const store = new SecureConfigStore(new MemoryFile(), {
       isAvailable: () => false,

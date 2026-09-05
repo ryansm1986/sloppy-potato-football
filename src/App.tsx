@@ -28,6 +28,8 @@ import ResearchDeskPage from "./features/research/ResearchDeskPage";
 import AgentDashboardPage from "./features/research/AgentDashboardPage";
 import SettingsPage from "./features/settings/SettingsPage";
 import SleepersPage from "./features/sleepers/SleepersPage";
+import PublishersPage from "./features/publishers/PublishersPage";
+import { useAuth } from "./features/auth/AuthProvider";
 
 type Icon = ComponentType<{ size?: number; strokeWidth?: number }>;
 
@@ -37,6 +39,7 @@ const navigation: Array<{ label: string; path: string; icon: Icon }> = [
   { label: "Players", path: "/players", icon: Search },
   { label: "Rankings", path: "/rankings", icon: Trophy },
   { label: "Sleepers", path: "/sleepers", icon: Telescope },
+  { label: "Publishers", path: "/publishers", icon: Newspaper },
   { label: "Draft Board", path: "/draft", icon: ClipboardList },
   { label: "Research Desk", path: "/research", icon: Bot },
   { label: "Agents", path: "/agents", icon: Activity },
@@ -67,7 +70,8 @@ function Brand() {
 }
 
 function NavItems({ mobile = false }: { mobile?: boolean }) {
-  return navigation.map(({ label, path, icon: NavIcon }) => (
+  const auth = useAuth();
+  return navigation.filter(({ path }) => auth.mode !== "google" || (path !== "/agents" || auth.user?.role === "owner") && (path !== "/research" || auth.user?.role !== "viewer")).map(({ label, path, icon: NavIcon }) => (
     <NavLink
       aria-label={label}
       className={({ isActive }) =>
@@ -84,6 +88,7 @@ function NavItems({ mobile = false }: { mobile?: boolean }) {
 }
 
 function Sidebar() {
+  const auth = useAuth();
   return (
     <aside className="sidebar">
       <Brand />
@@ -95,8 +100,8 @@ function Sidebar() {
         <div className="sidebar__footer">
           <div className="avatar">RS</div>
           <div>
-            <strong>Ryan S.</strong>
-            <span>Commissioner</span>
+            <strong>{auth.user?.name || auth.user?.email || "Ryan S."}</strong>
+            <span>{auth.user?.role ?? "Commissioner"}</span>
           </div>
         </div>
       </div>
@@ -122,6 +127,10 @@ function MobileHeader() {
 }
 
 function AppShell() {
+  const auth = useAuth();
+  const canResearch = auth.mode !== "google" || auth.user?.role !== "viewer";
+  const owner = auth.mode !== "google" || auth.user?.role === "owner";
+  const restricted = <div className="page"><h1>Research access required</h1><p>The owner can grant researcher access in Settings. You can still browse results and manage your personal rankings.</p></div>;
   return (
     <div className="app-shell">
       <DesktopNavigationBridge />
@@ -134,10 +143,11 @@ function AppShell() {
           <Route path="players" element={<ComingSoon title="Players" icon={Search} />} />
           <Route path="rankings" element={<RankingsPage />} />
           <Route path="sleepers" element={<SleepersPage />} />
+          <Route path="publishers" element={<PublishersPage />} />
           <Route path="draft" element={<ComingSoon title="Draft Board" icon={ClipboardList} />} />
-          <Route path="research" element={<ResearchDeskPage />} />
-          <Route path="agents" element={<AgentDashboardPage />} />
-          <Route path="research/schedules" element={<ResearchDeskPage />} />
+          <Route path="research" element={canResearch ? <ResearchDeskPage /> : restricted} />
+          <Route path="agents" element={owner ? <AgentDashboardPage /> : restricted} />
+          <Route path="research/schedules" element={canResearch ? <ResearchDeskPage /> : restricted} />
           <Route path="settings" element={<SettingsPage />} />
         </Routes>
       </main>

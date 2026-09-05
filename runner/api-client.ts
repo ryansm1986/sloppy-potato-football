@@ -33,7 +33,7 @@ export class RunnerApiClient {
       runnerId: this.config.runnerId,
       name: this.config.runnerName,
       provider: "codex",
-      version: "0.1.11",
+      version: "0.1.12",
       status,
       capabilities: ["source_refresh", "player_research", "rankings_research", "sleepers_research"],
     }, { signal, retries: 2 });
