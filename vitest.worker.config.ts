@@ -8,6 +8,8 @@ export default defineConfig({
     cloudflareTest(async () => ({
       miniflare: {
         bindings: {
+          // Legacy route fixtures opt in explicitly; Google tests supply their own bindings.
+          AUTH_MODE: "legacy",
           TEST_MIGRATIONS: await readD1Migrations(`${__dirname}/migrations`),
         },
       },

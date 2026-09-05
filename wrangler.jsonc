@@ -4,7 +4,7 @@
 	"compatibility_date": "2026-09-01",
 	"main": "./worker/index.ts",
 	"vars": {
-		"AUTH_MODE": "legacy",
+		"AUTH_MODE": "google",
 		"APP_BASE_URL": "https://sloppy-potato-fantasy-football.therealryansmith.workers.dev",
 		"OWNER_GOOGLE_EMAIL": "therealryansmith@gmail.com"
 	},

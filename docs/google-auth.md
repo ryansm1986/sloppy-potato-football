@@ -1,6 +1,6 @@
 # Google sign-in setup and handoff
 
-Planned first release: **v0.1.12**. The Google integration is implemented, but it is **not active** until the owner supplies Google OAuth credentials and deliberately deploys `AUTH_MODE=google`. Adding the migration or installing the desktop release alone does not make the existing workspace invite-only. Missing `AUTH_MODE`, or `AUTH_MODE=legacy`, preserves the current legacy behavior and owner-token access.
+First release: **v0.1.12**. Production configuration now selects `AUTH_MODE=google`; deployment requires the owner's Google OAuth credentials. Adding the migration or installing the desktop release alone does not make a workspace invite-only. Missing `AUTH_MODE`, or `AUTH_MODE=legacy`, preserves the previous legacy behavior and owner-token access. Do not change a private deployment back to legacy as a troubleshooting shortcut.
 
 Owner account: **therealryansmith@gmail.com**.
 
