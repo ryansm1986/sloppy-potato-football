@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ResearchDeskPage from "./ResearchDeskPage";
@@ -251,6 +251,40 @@ describe("ResearchDeskPage", () => {
       expect.objectContaining({ method: "POST" }),
     ));
     expect(await screen.findByText("Research job returned to the queue.")).toBeInTheDocument();
+  });
+
+  it("filters queue history and loads more history on demand", async () => {
+    vi.stubGlobal("fetch", mockBridge([failedJob, { ...failedJob, id: "queued", subject: "Josh Allen", status: "queued", error: null }]));
+    render(<MemoryRouter><ResearchDeskPage localDevelopmentOverride /></MemoryRouter>);
+    const queue = within(screen.getByRole("region", { name: "Research job queue" }));
+    await queue.findByText("Josh Allen");
+    fireEvent.change(queue.getByLabelText("Status"), { target: { value: "active" } });
+    expect(queue.queryByText("Bijan Robinson")).not.toBeInTheDocument();
+    expect(queue.getByText("Josh Allen")).toBeInTheDocument();
+    fireEvent.change(queue.getByLabelText("Find a job"), { target: { value: "missing" } });
+    expect(queue.getByText("No jobs match these filters.")).toBeInTheDocument();
+    fireEvent.change(queue.getByLabelText("History"), { target: { value: "100" } });
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/research/jobs?limit=100", expect.anything()));
+  });
+
+  it("refreshes rankings when a job completes without downloading them on unchanged refreshes", async () => {
+    let complete = false;
+    const base = mockBridge();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith("/api/research/jobs?")) return Response.json({ jobs: [{ ...failedJob, status: complete ? "completed" : "running" }] });
+      return base(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<MemoryRouter><ResearchDeskPage localDevelopmentOverride /></MemoryRouter>);
+    await screen.findByText("Runner busy");
+    const snapshotCalls = () => fetchMock.mock.calls.filter(([url]) => String(url).startsWith("/api/rankings/snapshots")).length;
+    const initialCalls = snapshotCalls();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled());
+    expect(snapshotCalls()).toBe(initialCalls);
+    complete = true;
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(snapshotCalls()).toBe(initialCalls + 1));
   });
 
 });

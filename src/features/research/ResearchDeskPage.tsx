@@ -22,7 +22,7 @@ import {
   Wifi,
   WifiOff,
 } from "lucide-react";
-import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, useSearchParams } from "react-router";
 import { fetchAgentRankings, type AgentRankingSnapshot } from "../rankings/agent-api";
 import {
@@ -55,6 +55,7 @@ import {
   type RunnerStatus,
 } from "./research-api";
 import { useResearchOwnerAccess } from "./useResearchOwnerAccess";
+import ResearchInsights from "./ResearchInsights";
 
 type BridgeAccessState = "locked" | "checking" | "authorized" | "denied";
 type RunnerDisplayState = RunnerState | "locked";
@@ -174,9 +175,20 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
   const [isLoading, setIsLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [historyLimit, setHistoryLimit] = useState(20);
+  const [queueFilter, setQueueFilter] = useState("all");
+  const [queueSearch, setQueueSearch] = useState("");
+  const [queueVisible, setQueueVisible] = useState(10);
+  const [lastRefreshed, setLastRefreshed] = useState<string | null>(null);
+  const refreshRequest = useRef<AbortController | null>(null);
   const canAttemptAccess = localDevelopment || Boolean(ownerToken);
   const authorized = accessState === "authorized";
   const runnerState: RunnerDisplayState = authorized ? runnerDisplayState(runner) : "locked";
+  const completedVersion = jobs.filter((job) => job.status === "completed").map((job) => `${job.id}:${job.updatedAt}`).join("|");
+  const visibleJobs = useMemo(() => jobs.filter((job) => {
+    const matchesState = queueFilter === "all" || (queueFilter === "active" ? job.status === "queued" || job.status === "running" : job.status === queueFilter);
+    return matchesState && `${job.subject ?? ""} ${job.sourceName ?? ""} ${JOB_TYPE_LABELS[job.type]} ${job.position ?? ""}`.toLowerCase().includes(queueSearch.trim().toLowerCase());
+  }), [jobs, queueFilter, queueSearch]);
 
   const canSubmit = useMemo(() => {
     if (!authorized || isSubmitting) return false;
@@ -191,47 +203,63 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
 
   const refreshBridge = useCallback(async (signal?: AbortSignal) => {
     if (!canAttemptAccess) return;
+    refreshRequest.current?.abort();
+    const request = new AbortController();
+    refreshRequest.current = request;
+    const abort = () => request.abort();
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) request.abort();
     setIsLoading(true);
     try {
       const [nextJobs, nextRunner, nextSchedules] = await Promise.all([
-        fetchResearchJobs(ownerToken, signal),
-        fetchRunnerStatus(ownerToken, signal),
-        fetchResearchSchedules(ownerToken, signal).catch(() => []),
+        fetchResearchJobs(ownerToken, request.signal, historyLimit),
+        fetchRunnerStatus(ownerToken, request.signal),
+        fetchResearchSchedules(ownerToken, request.signal).catch(() => null),
       ]);
+      if (request.signal.aborted) return;
       setJobs(nextJobs);
       setRunner(nextRunner);
-      setSchedules(nextSchedules);
+      if (nextSchedules) setSchedules(nextSchedules);
       setAccessState("authorized");
-      setPollError(null);
+      setPollError(nextSchedules ? null : "Schedules could not refresh. Showing the last loaded schedules.");
+      setLastRefreshed(new Date().toISOString());
     } catch (error) {
+      if (request.signal.aborted) return;
       if (error instanceof DOMException && error.name === "AbortError") return;
       if (error instanceof ResearchApiError && (error.status === 401 || error.status === 403)) {
         setAccessState("denied");
         setJobs([]);
         setRunner(null);
+        setSchedules([]);
         setPollError("Owner access was rejected. Open Settings to replace or remove it.");
       } else {
         setPollError(error instanceof Error ? error.message : "Could not reach the research bridge.");
       }
     } finally {
-      if (!signal?.aborted) setIsLoading(false);
+      signal?.removeEventListener("abort", abort);
+      if (refreshRequest.current === request) {
+        refreshRequest.current = null;
+        setIsLoading(false);
+      }
     }
-  }, [canAttemptAccess, ownerToken]);
+  }, [canAttemptAccess, ownerToken, historyLimit]);
 
   useEffect(() => {
     const controller = new AbortController();
-    setSnapshots([]);
     fetchAgentRankings(controller.signal, leagueSize)
       .then((nextSnapshots) => setSnapshots(nextSnapshots.filter((snapshot) => normalizeLeagueSize(snapshot.leagueSize) === leagueSize)))
       .catch(() => undefined);
     return () => controller.abort();
-  }, [leagueSize]);
+  }, [leagueSize, completedVersion]);
+
+  useEffect(() => { setSnapshots([]); }, [leagueSize]);
 
   useEffect(() => {
     if (!canAttemptAccess) {
       setAccessState("locked");
       setJobs([]);
       setRunner(null);
+      setSchedules([]);
       setPollError(null);
     }
   }, [canAttemptAccess, tokenRevision]);
@@ -240,10 +268,16 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
     if (!canAttemptAccess) return;
     const controller = new AbortController();
     void refreshBridge(controller.signal);
-    const timer = window.setInterval(() => void refreshBridge(controller.signal), 10_000);
+    const refreshVisible = () => {
+      if (!document.hidden && !refreshRequest.current) void refreshBridge(controller.signal);
+    };
+    const timer = window.setInterval(refreshVisible, 15_000);
+    document.addEventListener("visibilitychange", refreshVisible);
     return () => {
       controller.abort();
+      refreshRequest.current?.abort();
       window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refreshVisible);
     };
   }, [canAttemptAccess, refreshBridge, tokenRevision]);
 
@@ -472,6 +506,8 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
             {pollError && <p className="research-error" role="alert"><AlertCircle size={13} /> {pollError}</p>}
           </section>
 
+          <ResearchInsights jobs={authorized ? jobs : []} leagueSize={leagueSize} />
+
           {snapshots[0] ? <SnapshotResult snapshot={snapshots[0]} /> : (
             <section className="panel latest-result latest-result--empty">
               <FileSearch size={25} />
@@ -511,21 +547,31 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
         <aside className="research-side">
           <section className="panel job-queue" aria-label="Research job queue">
             <header><div><p className="eyebrow">Cloud queue</p><h2>Job Queue</h2></div><span>{jobs.length}</span></header>
+            {authorized && <div className="queue-tools">
+              <p>{jobs.filter((job) => job.status === "running").length} running · {jobs.filter((job) => job.status === "queued").length} queued · {jobs.filter((job) => job.status === "failed").length} failed</p>
+              <label>Find a job<input type="search" value={queueSearch} onChange={(event) => { setQueueSearch(event.target.value); setQueueVisible(10); }} placeholder="Player or source" /></label>
+              <div className="queue-tools__filters">
+                <label>Status<select value={queueFilter} onChange={(event) => { setQueueFilter(event.target.value); setQueueVisible(10); }}><option value="all">All jobs</option><option value="active">Active</option><option value="completed">Complete</option><option value="failed">Failed</option><option value="cancelled">Cancelled</option></select></label>
+                <label>History<select value={historyLimit} onChange={(event) => setHistoryLimit(Number(event.target.value))}><option value={20}>Latest 20</option><option value={50}>Latest 50</option><option value={100}>Latest 100</option></select></label>
+              </div>
+              <small title={lastRefreshed ? new Date(lastRefreshed).toLocaleString() : undefined}>{lastRefreshed ? `Updated ${formatRelativeDate(lastRefreshed)}` : "Connecting…"} · Auto-refreshes while visible</small>
+            </div>}
             {!authorized ? (
               <div className="queue-empty"><KeyRound size={20} /><p><NavLink to="/settings">Open Settings</NavLink> to unlock the private queue.</p></div>
             ) : jobs.length === 0 ? (
               <div className="queue-empty"><CircleDashed size={20} /><p>{isLoading ? "Loading jobs…" : "No assignments yet."}</p></div>
-            ) : jobs.slice(0, 10).map((job) => (
+            ) : visibleJobs.length === 0 ? <div className="queue-empty"><p>No jobs match these filters.</p></div> : visibleJobs.slice(0, queueVisible).map((job) => (
               <article key={job.id} className={`job-queue__item job-queue__item--${job.status}`}>
                 <JobStatusIcon status={job.status} />
                 <div>
-                  <strong>{job.sourceName || job.subject || `${job.position ?? "ALL"} PPR rankings`}</strong>
+                  <strong>{job.sourceName || job.subject || (job.type === "sleepers_research" ? "Sleepers by position" : `${job.position ?? "ALL"} PPR rankings`)}</strong>
                   <span>{JOB_TYPE_LABELS[job.type]}{job.rankingLimit ? ` · Top ${job.rankingLimit}` : ""} · {normalizeLeagueSize(job.leagueSize)} teams · {JOB_STATUS_LABELS[job.status]} · {formatRelativeDate(job.updatedAt || job.createdAt)}</span>
                   {job.error && <small>{job.error}</small>}
                 </div>
                 {job.status === "failed" && <button type="button" onClick={() => void retry(job.id)} disabled={retryingId === job.id} aria-label={`Retry ${job.sourceName || job.subject || "research job"}`}><RefreshCw className={retryingId === job.id ? "spin" : ""} size={13} /></button>}
               </article>
             ))}
+            {authorized && visibleJobs.length > queueVisible && <button className="text-button queue-show-more" type="button" onClick={() => setQueueVisible((current) => current + 10)}>Show more jobs ({visibleJobs.length - queueVisible} remaining)</button>}
           </section>
 
           <section className={`panel runner-card runner-card--${runnerState}`}>
