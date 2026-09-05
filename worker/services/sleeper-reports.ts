@@ -275,6 +275,7 @@ export async function discardUnpublishedSleeperReport(db: Database, jobId: strin
 
 type ReportRow = {
   id: string;
+  job_id: string;
   season: string;
   scoring_format: string;
   ranking_type: string;
@@ -289,6 +290,7 @@ type ReportRow = {
 
 type CandidateRow = {
   id: string;
+  report_id: string;
   position: typeof sleeperPositions[number];
   position_rank: number;
   player_name: string;
@@ -312,22 +314,29 @@ type SourceRow = {
   is_new_discovery: number;
 };
 
-export async function getLatestSleeperReport(db: Database) {
-  const report = await db.$client.prepare(
-    `SELECT id, season, scoring_format, ranking_type, league_size, summary, generated_at, created_at,
+export async function getLatestSleeperReport(db: Database, leagueSize?: number) {
+  return (await getSleeperReports(db, 1, undefined, leagueSize))[0] ?? null;
+}
+
+export async function getSleeperReports(db: Database, limit = 50, researchJobId?: string, leagueSize?: number) {
+  const reportRows = await db.$client.prepare(
+    `SELECT id, job_id, season, scoring_format, ranking_type, league_size, summary, generated_at, created_at,
             discover_new_sources, new_publisher_count
-     FROM sleeper_reports WHERE published_at IS NOT NULL ORDER BY published_at DESC, id DESC LIMIT 1`,
-  ).first<ReportRow>();
-  if (!report) return null;
+     FROM sleeper_reports WHERE published_at IS NOT NULL ${researchJobId ? "AND job_id = ?" : ""}
+     ${!researchJobId && leagueSize !== undefined ? "AND league_size = ?" : ""}
+     ORDER BY published_at DESC, id DESC LIMIT ?`,
+  ).bind(...(researchJobId ? [researchJobId] : leagueSize !== undefined ? [leagueSize] : []), Math.min(50, Math.max(1, Math.trunc(limit)))).all<ReportRow>();
+  if (reportRows.results.length === 0) return [];
+  const reportIdsJson = JSON.stringify(reportRows.results.map((report) => report.id));
 
   const [summaryRows, candidateRows] = await Promise.all([
-    db.$client.prepare("SELECT position, summary FROM sleeper_position_summaries WHERE report_id = ?")
-      .bind(report.id).all<{ position: typeof sleeperPositions[number]; summary: string }>(),
+    db.$client.prepare("SELECT report_id, position, summary FROM sleeper_position_summaries WHERE report_id IN (SELECT value FROM json_each(?))")
+      .bind(reportIdsJson).all<{ report_id: string; position: typeof sleeperPositions[number]; summary: string }>(),
     db.$client.prepare(
-      `SELECT id, position, position_rank, player_name, team, source_count,
+      `SELECT id, report_id, position, position_rank, player_name, team, source_count,
               recommended_pick_start, recommended_pick_end, summary, upside, risk
-       FROM sleeper_candidates WHERE report_id = ? ORDER BY position, position_rank, id`,
-    ).bind(report.id).all<CandidateRow>(),
+       FROM sleeper_candidates WHERE report_id IN (SELECT value FROM json_each(?)) ORDER BY position, position_rank, id`,
+    ).bind(reportIdsJson).all<CandidateRow>(),
   ]);
   const candidateIds = candidateRows.results.map((candidate) => candidate.id);
   const sourceRows = candidateIds.length === 0
@@ -338,7 +347,6 @@ export async function getLatestSleeperReport(db: Database) {
        WHERE candidate_id IN (SELECT value FROM json_each(?))
        ORDER BY publisher, id`,
     ).bind(JSON.stringify(candidateIds)).all<SourceRow>();
-  const summaries = new Map(summaryRows.results.map((row) => [row.position, row.summary]));
   const sourcesByCandidate = new Map<string, SourceRow[]>();
   for (const source of sourceRows.results) {
     const values = sourcesByCandidate.get(source.candidate_id) ?? [];
@@ -346,13 +354,15 @@ export async function getLatestSleeperReport(db: Database) {
     sourcesByCandidate.set(source.candidate_id, values);
   }
 
+  return reportRows.results.map((report) => {
+  const summaries = new Map(summaryRows.results.filter((row) => row.report_id === report.id).map((row) => [row.position, row.summary]));
   const positionSummaries = Object.fromEntries(sleeperPositions.map((position) => [
     position,
     summaries.get(position) ?? "",
   ])) as Record<typeof sleeperPositions[number], string>;
   const positions = Object.fromEntries(sleeperPositions.map((position) => [
     position,
-    candidateRows.results.filter((candidate) => candidate.position === position).map((candidate) => ({
+    candidateRows.results.filter((candidate) => candidate.report_id === report.id && candidate.position === position).map((candidate) => ({
       id: candidate.id,
       rank: candidate.position_rank,
       playerName: candidate.player_name,
@@ -379,6 +389,7 @@ export async function getLatestSleeperReport(db: Database) {
 
   return {
     id: report.id,
+    researchJobId: report.job_id,
     season: report.season,
     scoringFormat: report.scoring_format,
     rankingType: report.ranking_type,
@@ -391,4 +402,5 @@ export async function getLatestSleeperReport(db: Database) {
     createdAt: new Date(report.created_at).toISOString(),
     positions,
   };
+  });
 }

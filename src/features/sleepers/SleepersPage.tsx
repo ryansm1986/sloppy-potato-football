@@ -15,13 +15,16 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router";
+import { Link, useSearchParams } from "react-router";
+import { ResearchRunHistory, type ResearchRunOption } from "../rankings/ResearchRunHistory";
+import { LEAGUE_SIZE_OPTIONS, loadLeagueSize, normalizeLeagueSize, saveLeagueSize } from "../league-size";
 import {
   isLocalDevelopment,
   RESEARCH_OWNER_TOKEN_KEY,
 } from "../research/research-api";
 import {
   fetchLatestSleeperReport,
+  fetchSleeperReports,
   requestSleeperResearch,
   SLEEPER_POSITIONS,
   type SleeperCandidate,
@@ -120,12 +123,39 @@ function CandidateCard({ candidate, rank }: { candidate: SleeperCandidate; rank:
 export default function SleepersPage({ localDevelopmentOverride }: { localDevelopmentOverride?: boolean } = {}) {
   const localDevelopment = localDevelopmentOverride ?? isLocalDevelopment();
   const [activePosition, setActivePosition] = useState<SleeperPosition>("QB");
-  const [report, setReport] = useState<SleeperReport | null>(null);
+  const [latestReport, setReport] = useState<SleeperReport | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedRunId = searchParams.get("run");
+  const [leagueSize, setLeagueSize] = useState(() => searchParams.has("leagueSize") ? normalizeLeagueSize(searchParams.get("leagueSize")) : loadLeagueSize(window.localStorage));
+  const [historyReports, setHistoryReports] = useState<SleeperReport[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyReload, setHistoryReload] = useState(0);
+  const allReports = useMemo(() => {
+    const unique = new Map(historyReports.map((item) => [item.researchJobId ?? item.id, item]));
+    if (latestReport) unique.set(latestReport.researchJobId ?? latestReport.id, latestReport);
+    return [...unique.values()].filter((item) => normalizeLeagueSize(item.leagueSize) === leagueSize || (item.researchJobId ?? item.id) === selectedRunId)
+      .sort((a, b) => Date.parse(b.createdAt ?? b.generatedAt) - Date.parse(a.createdAt ?? a.generatedAt));
+  }, [historyReports, latestReport, leagueSize, selectedRunId]);
+  const report = selectedRunId ? allReports.find((item) => (item.researchJobId ?? item.id) === selectedRunId) ?? null
+    : latestReport && normalizeLeagueSize(latestReport.leagueSize) === leagueSize ? latestReport : null;
+  const historyRuns = useMemo<ResearchRunOption[]>(() => allReports.map((item) => {
+    const candidates = SLEEPER_POSITIONS.flatMap((position) => item.positions[position] ?? []);
+    const publishers = new Set(candidates.flatMap((candidate) => candidate.sources.map((source) => source.publisher.toLowerCase()))).size;
+    return { id: item.researchJobId ?? item.id, researchJobId: item.researchJobId, generatedAt: item.createdAt ?? item.generatedAt, title: `${item.season} ${item.scoringFormat.toUpperCase()} · ${item.leagueSize} teams`, detail: `${candidates.length} sleepers · ${publishers} publishers` };
+  }), [allReports]);
+  function selectRun(id: string | null) {
+    setSearchParams((params) => {
+      const next = new URLSearchParams(params);
+      if (id) next.set("run", id);
+      else next.delete("run");
+      return next;
+    });
+  }
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [leagueSize, setLeagueSize] = useState(12);
   const [sleepersPerPosition, setSleepersPerPosition] = useState(8);
   const [discoverNewSources, setDiscoverNewSources] = useState(true);
   const [pollBaseline, setPollBaseline] = useState<{ id: string | null; generatedAt: number } | null>(null);
@@ -136,7 +166,9 @@ export default function SleepersPage({ localDevelopmentOverride }: { localDevelo
   const loadReport = useCallback(async (signal?: AbortSignal) => {
     setIsLoading(true);
     try {
-      setReport(await fetchLatestSleeperReport(signal));
+      const latest = await fetchLatestSleeperReport(signal, leagueSize);
+      if (signal?.aborted) return;
+      setReport(latest);
       setLoadError(null);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
@@ -144,13 +176,36 @@ export default function SleepersPage({ localDevelopmentOverride }: { localDevelo
     } finally {
       if (!signal?.aborted) setIsLoading(false);
     }
-  }, []);
+  }, [leagueSize]);
 
   useEffect(() => {
     const controller = new AbortController();
     void loadReport(controller.signal);
     return () => controller.abort();
   }, [loadReport]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setHistoryLoading(true);
+    setHistoryError(null);
+    void fetchSleeperReports(controller.signal, undefined, leagueSize).then((reports) => {
+      if (!controller.signal.aborted) setHistoryReports((current) => [...reports, ...current.filter((item) => !reports.some((fresh) => fresh.id === item.id))]);
+    }).catch((error: unknown) => {
+      if (!controller.signal.aborted) setHistoryError(error instanceof Error ? error.message : "Could not load saved sleeper runs.");
+    }).finally(() => { if (!controller.signal.aborted) setHistoryLoading(false); });
+    return () => controller.abort();
+  }, [historyReload, latestReport?.id, leagueSize]);
+
+  useEffect(() => {
+    if (!selectedRunId || selectedRunId === "history") return;
+    const controller = new AbortController();
+    void fetchSleeperReports(controller.signal, selectedRunId).then((reports) => {
+      if (!controller.signal.aborted) setHistoryReports((current) => [...current, ...reports.filter((item) => !current.some((existing) => existing.id === item.id))]);
+    }).catch((error: unknown) => {
+      if (!controller.signal.aborted) setHistoryError(error instanceof Error ? error.message : "Could not load this sleeper run.");
+    });
+    return () => controller.abort();
+  }, [selectedRunId, historyReload]);
 
   useEffect(() => {
     if (!pollBaseline) return;
@@ -162,7 +217,8 @@ export default function SleepersPage({ localDevelopmentOverride }: { localDevelo
       inFlight = true;
       attempts += 1;
       try {
-        const latest = await fetchLatestSleeperReport(controller.signal);
+        const latest = await fetchLatestSleeperReport(controller.signal, leagueSize);
+        if (controller.signal.aborted) return;
         const latestTime = latest ? Date.parse(latest.generatedAt) : Number.NaN;
         const isNewer = Boolean(latest) && (
           latest!.id !== pollBaseline.id
@@ -191,7 +247,7 @@ export default function SleepersPage({ localDevelopmentOverride }: { localDevelo
       controller.abort();
       window.clearInterval(timer);
     };
-  }, [pollBaseline]);
+  }, [pollBaseline, leagueSize]);
 
   const candidates = useMemo(
     () => [...(report?.positions[activePosition] ?? [])].sort((left, right) =>
@@ -220,8 +276,8 @@ export default function SleepersPage({ localDevelopmentOverride }: { localDevelo
       await requestSleeperResearch(ownerToken, leagueSize, sleepersPerPosition, discoverNewSources);
       setNotice("Sleeper research queued. Results will publish here when your runner finishes.");
       setPollBaseline({
-        id: report?.id ?? null,
-        generatedAt: report && Number.isFinite(Date.parse(report.generatedAt)) ? Date.parse(report.generatedAt) : 0,
+        id: latestReport?.id ?? null,
+        generatedAt: latestReport && Number.isFinite(Date.parse(latestReport.generatedAt)) ? Date.parse(latestReport.generatedAt) : 0,
       });
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Could not queue sleeper research.");
@@ -241,13 +297,15 @@ export default function SleepersPage({ localDevelopmentOverride }: { localDevelo
         {report && <span className="badge badge--amber">{report.scoringFormat.toUpperCase()} {report.rankingType} &middot; {report.leagueSize} teams</span>}
       </header>
 
+      <ResearchRunHistory label="Sleepers" runs={historyRuns} selectedRunId={selectedRunId} onSelect={selectRun} loading={historyLoading} error={historyError} onRetry={() => setHistoryReload((value) => value + 1)} />
+
       <section className="panel sleeper-research-status">
         <div className="sleeper-research-status__summary">
           <div className="research-callout__icon"><Telescope size={19} /></div>
           <div>
-            <p className="eyebrow">Latest agent report</p>
-            <h2>{report ? `${report.season} sleeper board` : "Build the first sleeper board"}</h2>
-            <p>{report?.summary ?? "Queue a sourced scan across QB, RB, WR, and TE. Completed reports are readable by everyone you share the app with."}</p>
+            <p className="eyebrow">{selectedRunId ? "Saved agent report" : "Latest agent report"}</p>
+            <h2>{report ? `${report.season} sleeper board` : selectedRunId ? "Choose a saved sleeper run" : "Build the first sleeper board"}</h2>
+            <p>{report?.summary ?? (selectedRunId ? "Choose a completed report above to revisit the players, draft windows, and source evidence from that run." : "Queue a sourced scan across QB, RB, WR, and TE. Completed reports are readable by everyone you share the app with.")}</p>
           </div>
         </div>
         <div className="sleeper-research-status__meta">
@@ -288,10 +346,12 @@ export default function SleepersPage({ localDevelopmentOverride }: { localDevelo
             </div>
             {report?.positionSummaries?.[activePosition] && <p className="sleeper-position-summary">{report.positionSummaries[activePosition]}</p>}
 
-            {isLoading ? (
+            {isLoading || (historyLoading && selectedRunId && !report) ? (
               <div className="sleeper-state"><LoaderCircle className="spin" size={24} /><h3>Loading sleeper board</h3><p>Checking the latest published research.</p></div>
             ) : loadError ? (
               <div className="sleeper-state sleeper-state--error"><AlertCircle size={24} /><h3>Research unavailable</h3><p>{loadError}</p><button className="button button--secondary" onClick={() => void loadReport()}><RefreshCw size={14} /> Try again</button></div>
+            ) : selectedRunId && !report ? (
+              <div className="sleeper-state"><Clock3 size={25} /><h3>No saved report selected</h3><p>Choose a saved run above, or return to Current for the latest sleeper board.</p></div>
             ) : candidates.length === 0 ? (
               <div className="sleeper-state"><Lightbulb size={25} /><h3>No {activePosition} sleepers yet</h3><p>{report ? "This report did not return a player at this position." : "The owner can queue the first multi-source sleeper scan from the research controls."}</p></div>
             ) : (
@@ -307,7 +367,17 @@ export default function SleepersPage({ localDevelopmentOverride }: { localDevelo
             <header><div className="research-callout__icon"><Bot size={18} /></div><div><p className="eyebrow">Owner research control</p><h2>Refresh the board</h2></div></header>
             <p>Send one bounded assignment to your runner for current PPR redraft recommendations and direct source evidence.</p>
             <div className="sleeper-refresh-fields">
-              <label><span>League size</span><select aria-label="League size" value={leagueSize} onChange={(event) => setLeagueSize(Number(event.target.value))}><option value={10}>10 teams</option><option value={12}>12 teams</option><option value={14}>14 teams</option></select></label>
+              <label><span>League size</span><select aria-label="League size" value={leagueSize} onChange={(event) => {
+                const next = normalizeLeagueSize(event.target.value);
+                setLeagueSize(next);
+                saveLeagueSize(window.localStorage, next);
+                setSearchParams((params) => {
+                  const updated = new URLSearchParams(params);
+                  updated.set("leagueSize", String(next));
+                  updated.delete("run");
+                  return updated;
+                });
+              }}>{LEAGUE_SIZE_OPTIONS.map((size) => <option value={size} key={size}>{size} teams</option>)}</select></label>
               <label><span>Per position</span><select aria-label="Sleepers per position" value={sleepersPerPosition} onChange={(event) => setSleepersPerPosition(Number(event.target.value))}><option value={5}>5 players</option><option value={8}>8 players</option><option value={10}>10 players</option><option value={12}>12 players</option></select></label>
             </div>
             <label className="sleeper-scout-toggle">

@@ -294,18 +294,24 @@ export const rankingSnapshotQueryInput = z.object({
   leagueSize: rankingLeagueSize.optional(),
   source: z.string().trim().min(1).max(128).optional(),
   latestPerSource: z.boolean().optional().default(false),
+  researchJobId: z.string().uuid().optional(),
 });
 
 export type RankingSnapshotQuery = z.input<typeof rankingSnapshotQueryInput>;
 
 export async function getRankingSnapshots(db: Database, limit: number, query: RankingSnapshotQuery = {}) {
-  const parsedQuery = rankingSnapshotQueryInput.parse(query);
+  const validatedQuery = rankingSnapshotQueryInput.parse(query);
+  // An exact run is a historical board, independent of the current UI scope.
+  const parsedQuery = validatedQuery.researchJobId
+    ? { researchJobId: validatedQuery.researchJobId, latestPerSource: false } as typeof validatedQuery
+    : validatedQuery;
   const clauses = ["sn.status = 'completed'"];
   const bindings: unknown[] = [];
   const addFilter = (column: string, value: unknown) => {
     clauses.push(`${column} = ?`);
     bindings.push(value);
   };
+  if (parsedQuery.researchJobId) addFilter("sn.research_job_id", parsedQuery.researchJobId);
   if (parsedQuery.scoringFormat) addFilter("sn.scoring_format", parsedQuery.scoringFormat);
   if (parsedQuery.rankingType) addFilter("sn.ranking_type", parsedQuery.rankingType);
   if (parsedQuery.season) addFilter("sn.season", parsedQuery.season);
@@ -334,7 +340,7 @@ export async function getRankingSnapshots(db: Database, limit: number, query: Ra
      WHERE source_rank = 1
      ORDER BY created_at DESC, id DESC
      LIMIT ?`,
-  ).bind(...bindings, limit).all<{ id: string }>();
+  ).bind(...bindings, parsedQuery.researchJobId ? 100 : limit).all<{ id: string }>();
   const snapshotIds = selectedSnapshotIds.results.map((row) => row.id);
   if (snapshotIds.length === 0) return [];
 

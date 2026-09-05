@@ -14,6 +14,25 @@ const config: RunnerConfig = {
 };
 
 describe("RunnerApiClient", () => {
+  it("reports only a fixed stage and scoped lease with a short timeout and no retries", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(new Error("network unavailable"));
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    try {
+      await expect(new RunnerApiClient(config, fetchMock).progress("job/123", "lease-123", "researching"))
+        .rejects.toThrow("network unavailable");
+      expect(fetchMock).toHaveBeenCalledOnce();
+      const [url, init] = fetchMock.mock.calls[0]!;
+      expect(url).toBe("https://example.test/api/runners/jobs/job%2F123/progress");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        runnerId: config.runnerId, leaseToken: "lease-123", stage: "researching",
+      });
+      expect(timeout).toHaveBeenCalledWith(3_000);
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+    } finally {
+      timeout.mockRestore();
+    }
+  });
+
   it("sends a scoped bearer token and exact heartbeat capabilities", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response("{}", { status: 200 }));
     const client = new RunnerApiClient(config, fetchMock);

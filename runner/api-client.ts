@@ -6,6 +6,7 @@ import { researchJobSchema, type ResearchResult } from "./schemas.js";
 const claimResponseSchema = z.object({ job: researchJobSchema.nullable() }).passthrough();
 
 export type RunnerStatus = "idle" | "busy" | "stopping";
+export type ResearchStage = "starting" | "researching" | "validating" | "publishing";
 export type Failure = { code: string; message: string; retryable: boolean };
 
 export class RunnerAuthenticationError extends Error {
@@ -32,7 +33,7 @@ export class RunnerApiClient {
       runnerId: this.config.runnerId,
       name: this.config.runnerName,
       provider: "codex",
-      version: "0.1.0",
+      version: "0.1.10",
       status,
       capabilities: ["source_refresh", "player_research", "rankings_research", "sleepers_research"],
     }, { signal, retries: 2 });
@@ -43,6 +44,14 @@ export class RunnerApiClient {
       runnerId: this.config.runnerId,
     }, { signal, retries: 2 });
     return claimResponseSchema.parse(value).job;
+  }
+
+  async progress(jobId: string, leaseToken: string, stage: ResearchStage): Promise<void> {
+    await this.request(`/api/runners/jobs/${encodeURIComponent(jobId)}/progress`, {
+      runnerId: this.config.runnerId,
+      leaseToken,
+      stage,
+    }, { retries: 0, signal: AbortSignal.timeout(3_000) });
   }
 
   async complete(jobId: string, leaseToken: string, result: ResearchResult): Promise<void> {

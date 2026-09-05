@@ -80,7 +80,8 @@ const report: SleeperReport = {
 
 function mockReport(value: SleeperReport | null = report) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    if (String(input) === "/api/sleepers/latest") return Response.json({ report: value });
+    if (String(input).startsWith("/api/sleepers/latest")) return Response.json({ report: value });
+    if (String(input).startsWith("/api/sleepers/reports?")) return Response.json({ reports: value ? [value] : [] });
     if (String(input) === "/api/research/jobs" && init?.method === "POST") {
       return Response.json({ job: { id: "job-1", status: "queued" } }, { status: 201 });
     }
@@ -94,6 +95,43 @@ describe("SleepersPage", () => {
     cleanup();
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("moves between dated sleeper runs and returns to the current report", async () => {
+    const older: SleeperReport = {
+      ...report, id: "old-report", researchJobId: "old-run", generatedAt: "2025-08-01T12:00:00Z", season: "2025",
+      summary: "Earlier sleepers before the preseason breakout.",
+      positions: { ...report.positions, QB: [{ ...report.positions.QB[0], id: "old-qb", playerName: "Former Sleeper" }] },
+    };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input).startsWith("/api/sleepers/latest")
+      ? Response.json({ report }) : Response.json({ reports: [report, older] })));
+    render(<MemoryRouter><SleepersPage /></MemoryRouter>);
+    await screen.findByRole("heading", { name: "Consensus QB" });
+    fireEvent.click(await screen.findByRole("button", { name: "History 2" }));
+    fireEvent.click(screen.getByRole("button", { name: "Older sleepers run" }));
+    expect(await screen.findByRole("heading", { name: "Former Sleeper" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Sleepers saved run")).toHaveValue("old-run");
+    expect(screen.getByText(older.summary)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Consensus QB" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Current" }));
+    expect(screen.getByRole("heading", { name: "Consensus QB" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Former Sleeper" })).not.toBeInTheDocument();
+  });
+
+  it("loads a historical sleeper report from a dashboard deep link", async () => {
+    const older: SleeperReport = { ...report, id: "old-report", researchJobId: "deep-run", leagueSize: 14, generatedAt: "2025-08-01T12:00:00Z", summary: "Deep linked sleeper evidence." };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).startsWith("/api/sleepers/latest")) return Response.json({ report: { ...report, leagueSize: 14 } });
+      return Response.json({ reports: String(input).includes("researchJobId=deep-run") ? [older] : [report] });
+    }));
+    render(<MemoryRouter initialEntries={["/sleepers?run=deep-run&leagueSize=14"]}><SleepersPage /></MemoryRouter>);
+    expect(await screen.findByText(older.summary)).toBeInTheDocument();
+    expect(screen.getByLabelText("Sleepers saved run")).toHaveValue("deep-run");
+    expect(screen.getByLabelText("League size")).toHaveValue("14");
+    expect(screen.getByRole("link", { name: "View agent run log" })).toHaveAttribute("href", "/agents?job=deep-run");
+    fireEvent.click(screen.getByRole("button", { name: "Current" }));
+    expect(screen.getByText(report.summary)).toBeInTheDocument();
+    expect(screen.queryByText(older.summary)).not.toBeInTheDocument();
   });
 
   it("separates positions and ranks players by recommendation count", async () => {
@@ -221,7 +259,7 @@ describe("SleepersPage", () => {
     };
     let reportRequests = 0;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (String(input) === "/api/sleepers/latest") {
+      if (String(input).startsWith("/api/sleepers/latest")) {
         reportRequests += 1;
         return Response.json({ report: reportRequests === 1 ? report : updatedReport });
       }

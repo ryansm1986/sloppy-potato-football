@@ -1,6 +1,6 @@
 import type { RunnerConfig } from "./config.js";
 import { CodexExecutionError, executeCodexJob, type SpawnImplementation } from "./codex.js";
-import { RunnerApiClient, RunnerAuthenticationError } from "./api-client.js";
+import { RunnerApiClient, RunnerAuthenticationError, type ResearchStage } from "./api-client.js";
 import { acquireRunnerInstanceLock, type RunnerInstanceLock } from "./instance-lock.js";
 import { redact } from "./redact.js";
 import type { ResearchJob } from "./schemas.js";
@@ -30,13 +30,27 @@ export async function runOneJob(
   lifecycle.onJobStarted?.(job);
   log(`Claimed ${job.type} job ${job.id} (attempt ${job.attempt}).`);
   let heartbeat: NodeJS.Timeout | undefined;
+  let pendingHeartbeat: Promise<void> | undefined;
+  const reportStage = async (stage: ResearchStage): Promise<void> => {
+    try {
+      await api.progress?.(job.id, job.leaseToken, stage);
+    } catch {
+      log("Progress update unavailable; research is continuing.");
+    }
+  };
   try {
+    await reportStage("starting");
     await api.heartbeat("busy");
     heartbeat = setInterval(() => {
-      void api.heartbeat("busy").catch((error) => log(`Heartbeat warning: ${redact(error)}`));
+      if (pendingHeartbeat) return;
+      pendingHeartbeat = api.heartbeat("busy")
+        .catch((error) => log(`Heartbeat warning: ${redact(error)}`))
+        .finally(() => { pendingHeartbeat = undefined; });
     }, 30_000);
     heartbeat.unref();
-    const result = await executeCodexJob(config, job, dependencies.spawn);
+    await reportStage("researching");
+    const result = await executeCodexJob(config, job, dependencies.spawn, reportStage);
+    await reportStage("publishing");
     await api.complete(job.id, job.leaseToken, result);
     log(`Completed job ${job.id}.`);
   } catch (error) {
@@ -47,6 +61,8 @@ export async function runOneJob(
     log(`Failed job ${job.id}: ${failure.message}`);
   } finally {
     if (heartbeat) clearInterval(heartbeat);
+    // Drain a busy request before advertising idle or allowing a controller stop.
+    await pendingHeartbeat;
     await api.heartbeat("idle").catch((error) => log(`Heartbeat warning: ${redact(error)}`));
     lifecycle.onJobFinished?.(job);
   }

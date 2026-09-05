@@ -1,4 +1,5 @@
 import {
+  Activity,
   Bot,
   ChevronRight,
   ClipboardList,
@@ -24,6 +25,7 @@ import { lineup, movers, news } from "./data";
 import DesktopUpdateControl from "./features/desktop/DesktopUpdateControl";
 import RankingsPage from "./features/rankings/RankingsPage";
 import ResearchDeskPage from "./features/research/ResearchDeskPage";
+import AgentDashboardPage from "./features/research/AgentDashboardPage";
 import SettingsPage from "./features/settings/SettingsPage";
 import SleepersPage from "./features/sleepers/SleepersPage";
 
@@ -37,6 +39,7 @@ const navigation: Array<{ label: string; path: string; icon: Icon }> = [
   { label: "Sleepers", path: "/sleepers", icon: Telescope },
   { label: "Draft Board", path: "/draft", icon: ClipboardList },
   { label: "Research Desk", path: "/research", icon: Bot },
+  { label: "Agents", path: "/agents", icon: Activity },
   { label: "Settings", path: "/settings", icon: Settings },
 ];
 
@@ -133,6 +136,7 @@ function AppShell() {
           <Route path="sleepers" element={<SleepersPage />} />
           <Route path="draft" element={<ComingSoon title="Draft Board" icon={ClipboardList} />} />
           <Route path="research" element={<ResearchDeskPage />} />
+          <Route path="agents" element={<AgentDashboardPage />} />
           <Route path="research/schedules" element={<ResearchDeskPage />} />
           <Route path="settings" element={<SettingsPage />} />
         </Routes>

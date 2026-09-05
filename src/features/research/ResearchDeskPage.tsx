@@ -396,6 +396,7 @@ export default function ResearchDeskPage({ localDevelopmentOverride }: { localDe
           <p className="page-header__copy">Queue focused football research, follow the local runner, and keep every sourced result.</p>
         </div>
         <div className="page-header__actions">
+          <NavLink className="button button--secondary" to="/agents"><Bot size={14} /> Agent dashboard</NavLink>
           <span className={`status-pill status-pill--${runnerState}`}><RunnerIcon state={runnerState} /> Runner {runnerState}</span>
           {authorized && <button className="button button--secondary" type="button" onClick={() => void refreshBridge()} disabled={isLoading}><RefreshCw className={isLoading ? "spin" : ""} size={13} /> Refresh</button>}
         </div>

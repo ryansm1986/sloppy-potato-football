@@ -1,6 +1,8 @@
 import type { DrizzleD1Database } from "drizzle-orm/d1";
 import { z } from "zod";
 import * as schema from "../db/schema";
+import { defaultResearchSettings, getResearchSettings, researchSettingsInstructions, type ResearchSettings } from "./agent-settings";
+import { safeResearchEventDetails } from "./research-event-details";
 import {
   createRankingSnapshot,
   discardPendingRankingSnapshots,
@@ -75,6 +77,7 @@ type ResearchTaskInput = z.infer<typeof createResearchJobInput> & {
   // Populated only by the Worker from completed ranking/sleeper source history.
   // It is not part of the owner-facing schema and cannot be client-supplied.
   knownSourceDomains?: string[];
+  researchSettings?: ResearchSettings;
 };
 
 export const runnerHeartbeatInput = z.object({
@@ -146,7 +149,7 @@ export const failResearchJobInput = z.object({
   }),
 });
 
-type ResearchJobRow = {
+export type ResearchJobRow = {
   id: string;
   owner_identity: string;
   job_type: z.infer<typeof jobType>;
@@ -171,7 +174,7 @@ type ResearchJobRow = {
   updated_at: number;
 };
 
-type RunnerRow = {
+export type RunnerRow = {
   id: string;
   name: string;
   provider: string;
@@ -204,7 +207,7 @@ function iso(value: number | null) {
   return value === null ? null : new Date(value).toISOString();
 }
 
-function toPublicJob(row: ResearchJobRow) {
+export function toPublicJob(row: ResearchJobRow) {
   const input = parseJson<ResearchTaskInput>(row.task_input_json, {} as never);
   return {
     id: row.id,
@@ -230,12 +233,14 @@ function toPublicJob(row: ResearchJobRow) {
     maxAttempts: row.max_attempts,
     error: row.error_message,
     errorCode: row.error_code,
+    runnerId: row.leased_by_runner_id,
+    researchSettings: input.researchSettings ?? null,
     result: parseJson(row.result_json, null),
     rankingSnapshotId: row.ranking_snapshot_id,
   };
 }
 
-function executionContext(row: ResearchJobRow) {
+function baseExecutionContext(row: ResearchJobRow) {
   const input = parseJson<ResearchTaskInput>(row.task_input_json, {} as never);
   const scope = `${input.leagueSize ?? 12}-team ${input.scoringFormat ?? "ppr"} ${input.rankingType ?? "redraft"}, ${input.position ?? "ALL"}, season ${input.season ?? new Date().getUTCFullYear()}`;
   const rankingLimit = input.rankingLimit ?? 100;
@@ -249,6 +254,29 @@ function executionContext(row: ResearchJobRow) {
     case "sleepers_research":
       return `Research current-season PPR redraft sleepers for a ${input.leagueSize ?? 12}-team league. Return up to ${input.sleepersPerPosition ?? 8} evidence-backed candidates for each of QB, RB, WR, and TE. Preserve each independent publisher's direct article URL and recommendation for each player. Recommend an overall-pick range for every candidate; the server derives rounds and ranks candidates by their count of unique recommending source domains.${input.discoverNewSources ? ` Source discovery is enabled. Previously used canonical publisher domains: ${(input.knownSourceDomains ?? []).join(", ") || "none"}. Try to include at least two credible current-season publisher domains outside that snapshot; if they cannot be verified, fall back to the strongest established sources.` : ""}`;
   }
+}
+
+function executionContext(row: ResearchJobRow) {
+  const input = parseJson<ResearchTaskInput>(row.task_input_json, {} as never);
+  const preferences = researchSettingsInstructions(input.researchSettings ?? defaultResearchSettings);
+  let base = baseExecutionContext(row);
+  // Legacy runners bound this field to 2,000 characters. Preserve preferences
+  // even when source discovery carries a large historical domain list.
+  const budget = 2_000 - preferences.length;
+  const domains = input.knownSourceDomains?.join(", ");
+  if (domains && base.length > budget) {
+    const domainBudget = Math.max(0, budget - (base.length - domains.length) - 1);
+    base = base.replace(domains, `${domains.slice(0, domainBudget)}…`);
+  }
+  return (base.length > budget ? `${base.slice(0, budget - 1)}…` : base) + preferences;
+}
+
+function legacyCompatibleClaimInput(row: ResearchJobRow) {
+  const input = parseJson<ResearchTaskInput>(row.task_input_json, {} as never);
+  // Older desktop runners use a strict input schema. Preferences travel through
+  // executionContext so they can honor new settings without a forced update.
+  const { researchSettings: _researchSettings, ...legacyInput } = input;
+  return { ...legacyInput, leagueSize: input.leagueSize ?? 12 };
 }
 
 async function insertEvent(db: Database, jobId: string, type: string, actorType: string, actorId?: string, details: unknown = {}) {
@@ -291,13 +319,14 @@ export async function createResearchJob(
 
   const id = crypto.randomUUID();
   const now = Date.now();
-  const taskInput: ResearchTaskInput = input.discoverNewSources
+  const sourceInput: ResearchTaskInput = input.discoverNewSources
     ? input.type === "sleepers_research"
       ? { ...input, knownSourceDomains: await snapshotKnownSleeperSourceDomains(db) }
       : input.type === "rankings_research"
         ? { ...input, knownSourceDomains: await snapshotKnownRankingSourceDomains(db) }
         : input
     : input;
+  const taskInput = { ...sourceInput, researchSettings: await getResearchSettings(db, ownerIdentity) };
   try {
     await db.$client.batch([
       db.$client.prepare(
@@ -345,7 +374,7 @@ export async function getResearchJob(db: Database, id: string, ownerIdentity = "
       type: event.event_type,
       actorType: event.actor_type,
       actorId: event.actor_id,
-      details: parseJson(event.details_json, {}),
+      details: safeResearchEventDetails(event.details_json),
       createdAt: iso(event.created_at),
     })),
   };
@@ -393,9 +422,10 @@ export async function heartbeatRunner(db: Database, input: z.infer<typeof runner
   return toRunner(runner!, now);
 }
 
-function toRunner(row: RunnerRow, now = Date.now()) {
+export function toRunner(row: RunnerRow, now = Date.now()) {
   const age = now - row.last_seen_at;
-  const state = age > 5 * 60_000 ? "offline" : age > 60_000 ? "stale" : row.current_job_id || row.status === "busy" ? "busy" : "online";
+  const stopped = row.status === "stopping" || row.status === "stopped";
+  const state = stopped || age > 5 * 60_000 ? "offline" : age > 60_000 ? "stale" : row.current_job_id || row.status === "busy" ? "busy" : "online";
   return {
     id: row.id,
     name: row.name,
@@ -436,7 +466,7 @@ export async function claimResearchJob(db: Database, runnerId: string) {
       return {
         id: active.id,
         type: active.job_type,
-        input: parseJson(active.task_input_json, {}),
+        input: legacyCompatibleClaimInput(active),
         attempt: active.attempt_count,
         maxAttempts: active.max_attempts,
         leaseToken: active.lease_token,
@@ -488,11 +518,10 @@ export async function claimResearchJob(db: Database, runnerId: string) {
   ).bind(candidate.id, now, now, runnerId).run();
   await insertEvent(db, candidate.id, "claimed", "runner", runnerId, { leaseExpiresAt: iso(leaseExpiresAt) });
   const job = (await findJob(db, candidate.id))!;
-  const claimedInput = parseJson<ResearchTaskInput>(job.task_input_json, {} as never);
   return {
     id: job.id,
     type: job.job_type,
-    input: { ...claimedInput, leagueSize: claimedInput.leagueSize ?? 12 },
+    input: legacyCompatibleClaimInput(job),
     attempt: job.attempt_count,
     maxAttempts: job.max_attempts,
     leaseToken,

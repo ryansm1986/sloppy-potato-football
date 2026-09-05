@@ -67,6 +67,52 @@ describe("RankingsPage", () => {
     vi.restoreAllMocks();
   });
 
+  it("groups sources by research run and keeps historical aggregate changes out of the current board", async () => {
+    const current = [agentSnapshot, secondExpertSnapshot].map((snapshot) => ({ ...snapshot, researchJobId: "run-current" }));
+    const historical = current.map((snapshot) => ({
+      ...snapshot, id: `old-${snapshot.id}`, researchJobId: "run-old", generatedAt: "2026-08-01T12:00:00Z",
+      entries: [{ ...snapshot.entries[0], id: `old-${snapshot.entries[0].id}`, playerName: "Historical Prospect" }],
+    }));
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/rankings/snapshots")) return Response.json({ snapshots: url.includes("researchJobId=run-old") ? historical : [...current, ...historical] });
+      return Response.json({ players: [] });
+    }));
+    render(<MemoryRouter><RankingsPage /></MemoryRouter>);
+    const agentList = await screen.findByRole("list", { name: "Displayed agent rankings" });
+    expect(within(agentList).queryByText("Historical Prospect")).not.toBeInTheDocument();
+    const personalOrder = document.querySelector(".ranking-list")?.textContent;
+    fireEvent.click(screen.getByRole("button", { name: /History 2/ }));
+    fireEvent.change(screen.getByLabelText("Rankings saved run"), { target: { value: "run-old" } });
+    await waitFor(() => expect(within(screen.getByRole("list", { name: "Displayed agent rankings" })).getByText("Historical Prospect")).toBeInTheDocument());
+    expect(screen.getByRole("combobox", { name: "Ranking source" })).toHaveTextContent("Aggregate · 2/2 sources");
+    fireEvent.click(screen.getByRole("button", { name: "Remove Expert B from aggregate" }));
+    expect(screen.getByRole("combobox", { name: "Ranking source" })).toHaveTextContent("Aggregate · 1/2 sources");
+    expect(document.querySelector(".ranking-list")?.textContent).toBe(personalOrder);
+    fireEvent.click(screen.getByRole("button", { name: "Current" }));
+    expect(within(screen.getByRole("list", { name: "Displayed agent rankings" })).queryByText("Historical Prospect")).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Ranking source" })).toHaveTextContent("Aggregate · 2/2 sources");
+    expect(document.querySelector(".ranking-list")?.textContent).toBe(personalOrder);
+  });
+
+  it("opens an older ranking run from a dashboard deep link even outside the latest snapshot page", async () => {
+    const older = { ...agentSnapshot, id: "archive-snapshot", researchJobId: "archived-job", leagueSize: 14, generatedAt: "2025-08-01T12:00:00Z", season: "2025", entries: [{ ...agentSnapshot.entries[0], playerName: "Archived Player" }] };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes("researchJobId=archived-job")) return Response.json({ snapshots: [older] });
+      if (String(input).startsWith("/api/rankings/snapshots")) return Response.json({ snapshots: [{ ...agentSnapshot, leagueSize: 14 }] });
+      return Response.json({ players: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<MemoryRouter initialEntries={["/rankings?run=archived-job&leagueSize=14"]}><RankingsPage /></MemoryRouter>);
+    await waitFor(() => expect(within(screen.getByRole("list", { name: "Displayed agent rankings" })).getByText("Archived Player")).toBeInTheDocument());
+    expect(screen.getByLabelText("Rankings saved run")).toHaveValue("archived-job");
+    expect(screen.getByLabelText("Rankings league size")).toHaveValue("14");
+    expect(screen.getByRole("link", { name: "View agent run log" })).toHaveAttribute("href", "/agents?job=archived-job");
+    expect(screen.getByText("Historical", { selector: ".research-run-history__badge" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Current" }));
+    expect(within(screen.getByRole("list", { name: "Displayed agent rankings" })).queryByText("Archived Player")).not.toBeInTheDocument();
+  });
+
   it("moves and saves a personal ranking with accessible controls", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ snapshots: [] })));
     render(<MemoryRouter><RankingsPage /></MemoryRouter>);

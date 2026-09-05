@@ -533,8 +533,17 @@ export const researchJobEvents = sqliteTable(
     detailsJson: text("details_json").notNull().default("{}"),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().default(nowMs),
   },
-  (table) => [index("research_job_events_job_created_idx").on(table.jobId, table.createdAt)],
+  (table) => [
+    index("research_job_events_job_created_idx").on(table.jobId, table.createdAt),
+    index("research_job_events_created_idx").on(sql`${table.createdAt} DESC`, sql`${table.id} DESC`),
+  ],
 );
+
+export const researchAgentSettings = sqliteTable("research_agent_settings", {
+  ownerIdentity: text("owner_identity").primaryKey().notNull(),
+  settingsJson: text("settings_json").notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+});
 
 export const researchSchedules = sqliteTable(
   "research_schedules",

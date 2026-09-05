@@ -34,6 +34,7 @@ export type SleeperCandidate = {
 
 export type SleeperReport = {
   id: string;
+  researchJobId?: string;
   season: string;
   scoringFormat: string;
   rankingType: string;
@@ -47,8 +48,18 @@ export type SleeperReport = {
   positions: Record<SleeperPosition, SleeperCandidate[]>;
 };
 
-export async function fetchLatestSleeperReport(signal?: AbortSignal): Promise<SleeperReport | null> {
-  const response = await fetch("/api/sleepers/latest", {
+export async function fetchSleeperReports(signal?: AbortSignal, researchJobId?: string, leagueSize?: number): Promise<SleeperReport[]> {
+  const params = new URLSearchParams({ limit: "50" });
+  if (researchJobId) params.set("researchJobId", researchJobId);
+  if (leagueSize !== undefined) params.set("leagueSize", String(leagueSize));
+  const response = await fetch(`/api/sleepers/reports?${params}`, { headers: { Accept: "application/json" }, signal });
+  if (!response.ok) throw new Error(`Sleeper history returned ${response.status}`);
+  const payload = await response.json() as { reports?: SleeperReport[] };
+  return payload.reports ?? [];
+}
+
+export async function fetchLatestSleeperReport(signal?: AbortSignal, leagueSize?: number): Promise<SleeperReport | null> {
+  const response = await fetch(`/api/sleepers/latest${leagueSize === undefined ? "" : `?leagueSize=${leagueSize}`}`, {
     headers: { Accept: "application/json" },
     signal,
   });

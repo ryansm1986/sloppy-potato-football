@@ -46,7 +46,7 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
-import { NavLink } from "react-router";
+import { NavLink, useSearchParams } from "react-router";
 import {
   DEFAULT_LEAGUE_SIZE,
   LEAGUE_SIZE_OPTIONS,
@@ -61,6 +61,8 @@ import {
   type ResearchJob,
 } from "../research/research-api";
 import { fetchAgentRankings, type AgentRankingSnapshot } from "./agent-api";
+import { ResearchRunHistory } from "./ResearchRunHistory";
+import { groupRankingRuns } from "./ranking-history";
 import { fetchFantasyPlayerCatalog, type CanonicalFantasyPlayer } from "./player-api";
 import {
   fetchCloudPersonalRankings,
@@ -382,19 +384,19 @@ function AgentRankingRow({
 }
 
 function AgentSnapshotPanel({
-  snapshots,
+  snapshots: currentSnapshots,
   loading,
   error,
   collapsed,
   favoriteSourceKeys,
-  excludedAggregateSourceKeys,
+  excludedAggregateSourceKeys: currentExcludedSourceKeys,
   researchByPlayer,
   hasOwnerToken,
   onCollapsedChange,
   onRefresh,
   onToggleFavorite,
-  onToggleAggregateSource,
-  onRestoreAggregateSources,
+  onToggleAggregateSource: onToggleCurrentAggregateSource,
+  onRestoreAggregateSources: onRestoreCurrentAggregateSources,
   onApply,
   leagueSize,
 }: {
@@ -414,6 +416,57 @@ function AgentSnapshotPanel({
   onApply: (snapshot: AgentRankingSnapshot, position: string) => void;
   leagueSize: LeagueSize;
 }) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedRunId = searchParams.get("run");
+  const [linkedSnapshots, setLinkedSnapshots] = useState<AgentRankingSnapshot[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyReload, setHistoryReload] = useState(0);
+  const [historyExcludedSourceKeys, setHistoryExcludedSourceKeys] = useState<string[]>([]);
+  const runs = useMemo(() => groupRankingRuns([
+    ...currentSnapshots,
+    ...linkedSnapshots.filter((item) => !currentSnapshots.some((current) => current.id === item.id)),
+  ]), [currentSnapshots, linkedSnapshots]);
+  const snapshots = selectedRunId ? runs.find((run) => run.id === selectedRunId)?.snapshots ?? [] : currentSnapshots;
+  const excludedAggregateSourceKeys = selectedRunId ? historyExcludedSourceKeys : currentExcludedSourceKeys;
+  function onToggleAggregateSource(key: string) {
+    if (selectedRunId) setHistoryExcludedSourceKeys((current) => toggleAggregateSource(current, key));
+    else onToggleCurrentAggregateSource(key);
+  }
+  function onRestoreAggregateSources(keys: string[]) {
+    if (selectedRunId) setHistoryExcludedSourceKeys((current) => current.filter((key) => !keys.includes(key)));
+    else onRestoreCurrentAggregateSources(keys);
+  }
+  function selectRun(id: string | null) {
+    setSearchParams((params) => {
+      const next = new URLSearchParams(params);
+      if (id) next.set("run", id);
+      else next.delete("run");
+      return next;
+    });
+    setSelectedSourceKey("aggregate");
+    setSelectedId(null);
+  }
+  useEffect(() => {
+    setHistoryExcludedSourceKeys([]);
+    setSelectedSourceKey("aggregate");
+    setSelectedId(null);
+  }, [selectedRunId]);
+  useEffect(() => {
+    if (selectedRunId && collapsed) onCollapsedChange(false);
+  }, [selectedRunId, collapsed, onCollapsedChange]);
+  useEffect(() => {
+    if (!selectedRunId || selectedRunId === "history") return;
+    const controller = new AbortController();
+    setHistoryLoading(true);
+    setHistoryError(null);
+    void fetchAgentRankings(controller.signal, undefined, selectedRunId).then((values) => {
+      if (!controller.signal.aborted) setLinkedSnapshots(values.filter((value) => (value.researchJobId ?? value.id) === selectedRunId));
+    }).catch((failure: unknown) => {
+      if (!controller.signal.aborted) setHistoryError(failure instanceof Error ? failure.message : "Could not load this run.");
+    }).finally(() => { if (!controller.signal.aborted) setHistoryLoading(false); });
+    return () => controller.abort();
+  }, [selectedRunId, historyReload]);
   const [selectedSourceKey, setSelectedSourceKey] = useState("aggregate");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [copyScope, setCopyScope] = useState("ALL");
@@ -431,9 +484,6 @@ function AgentSnapshotPanel({
   );
   const latestBySource = useMemo(() => selectLatestSnapshotPerSource(scopedSnapshots), [scopedSnapshots]);
   const selectedSource = latestBySource.find((snapshot) => snapshot.source.canonicalKey === selectedSourceKey);
-  const sourceHistory = selectedSourceKey === "aggregate"
-    ? []
-    : scopedSnapshots.filter((snapshot) => snapshot.source.canonicalKey === selectedSourceKey);
   const selected = selectedSourceKey === "aggregate"
     ? aggregate?.snapshot
     : scopedSnapshots.find((snapshot) => snapshot.id === selectedId && snapshot.source.canonicalKey === selectedSourceKey) ?? selectedSource;
@@ -559,6 +609,8 @@ function AgentSnapshotPanel({
         </div>
       ) : <>
 
+      <ResearchRunHistory label="Rankings" runs={runs} selectedRunId={selectedRunId} onSelect={selectRun} loading={historyLoading} error={historyError} onRetry={() => setHistoryReload((value) => value + 1)} />
+
       {loading && <div className="agent-empty"><RefreshCw className="spin" size={20} /><p>Checking for new snapshots…</p></div>}
       {!loading && error && (
         <div className="agent-empty">
@@ -566,7 +618,7 @@ function AgentSnapshotPanel({
           <small>{error}</small>
         </div>
       )}
-      {!loading && !error && snapshots.length === 0 && (
+      {!loading && !error && !selectedRunId && snapshots.length === 0 && (
         <div className="agent-empty">
           <Sparkles size={22} />
           <h3>No agent snapshots yet</h3>
@@ -590,7 +642,7 @@ function AgentSnapshotPanel({
               </select>
             </label>
             <div className="agent-source-toolbar__context">
-              <small>Select a source name to view it. The circle controls aggregate membership; the star saves a favorite.</small>
+              <small>{selectedRunId ? "Sources and aggregate from this run only. Source changes here are temporary; your current aggregate and personal board stay saved." : "Select a source name to view it. The circle controls aggregate membership; the star saves a favorite."}</small>
               {discoverySnapshot && (
                 <span className="ranking-discovery-count"><Telescope size={11} /> Latest scout: {newPublisherCount ? `${newPublisherCount} new ${newPublisherCount === 1 ? "publisher" : "publishers"}` : "no new publishers"}</span>
               )}
@@ -737,14 +789,6 @@ function AgentSnapshotPanel({
             </NavLink>}
           </div>
           </>}
-          {sourceHistory.length > 1 && (
-            <label className="snapshot-select">
-              Source history
-              <select value={selected.id} onChange={(event) => setSelectedId(event.target.value)}>
-                {sourceHistory.map((snapshot) => <option key={snapshot.id} value={snapshot.id}>{snapshot.title}</option>)}
-              </select>
-            </label>
-          )}
         </>
       )}
       </>}
@@ -753,6 +797,7 @@ function AgentSnapshotPanel({
 }
 
 export default function RankingsPage() {
+  const [pageSearchParams, setPageSearchParams] = useSearchParams();
   const initialSavedRankings = useRef<RankingPlayer[] | null>(
     typeof window === "undefined" ? null : loadSavedPersonalRankings(window.localStorage),
   );
@@ -761,7 +806,8 @@ export default function RankingsPage() {
   const [position, setPosition] = useState<(typeof positions)[number]>("ALL");
   const [announcement, setAnnouncement] = useState("");
   const [leagueSize, setLeagueSize] = useState<LeagueSize>(() =>
-    typeof window === "undefined" ? DEFAULT_LEAGUE_SIZE : loadLeagueSize(window.localStorage));
+    pageSearchParams.has("leagueSize") ? normalizeLeagueSize(pageSearchParams.get("leagueSize"))
+      : typeof window === "undefined" ? DEFAULT_LEAGUE_SIZE : loadLeagueSize(window.localStorage));
   const [snapshots, setSnapshots] = useState<AgentRankingSnapshot[]>([]);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [snapshotsLoading, setSnapshotsLoading] = useState(true);
@@ -1181,6 +1227,12 @@ export default function RankingsPage() {
                 const next = normalizeLeagueSize(event.target.value);
                 setLeagueSize(next);
                 saveLeagueSize(window.localStorage, next);
+                setPageSearchParams((params) => {
+                  const updated = new URLSearchParams(params);
+                  updated.set("leagueSize", String(next));
+                  updated.delete("run");
+                  return updated;
+                });
               }}
             >
               {LEAGUE_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size} teams</option>)}

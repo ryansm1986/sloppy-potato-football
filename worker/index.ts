@@ -21,6 +21,7 @@ import {
   createRankingSnapshot,
   getRankingSnapshots,
   rankingSnapshotInput,
+  rankingLeagueSize,
   rankingSnapshotQueryInput,
 } from "./services/ranking-snapshots";
 import {
@@ -46,7 +47,9 @@ import {
   retryResearchJob,
   runnerHeartbeatInput,
 } from "./services/research-bridge";
-import { getLatestSleeperReport } from "./services/sleeper-reports";
+import { getLatestSleeperReport, getSleeperReports } from "./services/sleeper-reports";
+import { getAgentDashboard, getAgentJobEvents, recordResearchProgress, researchProgressInput } from "./services/agent-dashboard";
+import { getResearchSettings, saveResearchSettings, researchSettingsInput } from "./services/agent-settings";
 import {
   PersonalRankingError,
   getPersonalRankingBoard,
@@ -226,7 +229,18 @@ app.get("/api/health", async (context) => {
 // Reports are safe to share with the small friend group. Only the separate
 // /api/research queue can activate the owner's runner.
 app.get("/api/sleepers/latest", async (context) => {
-  return context.json({ report: await getLatestSleeperReport(database(context)) });
+  const value = context.req.query("leagueSize");
+  const leagueSize = rankingLeagueSize.optional().safeParse(value === undefined ? undefined : Number(value));
+  if (!leagueSize.success) return context.json({ error: "invalid_request", message: "Invalid league size" }, 400);
+  return context.json({ report: await getLatestSleeperReport(database(context), leagueSize.data) });
+});
+
+app.get("/api/sleepers/reports", async (context) => {
+  const leagueSizeValue = context.req.query("leagueSize");
+  const query = z.object({ limit: z.coerce.number().int().min(1).max(50).default(50), researchJobId: z.string().uuid().optional(), leagueSize: rankingLeagueSize.optional() })
+    .safeParse({ limit: context.req.query("limit"), researchJobId: context.req.query("researchJobId"), leagueSize: leagueSizeValue === undefined ? undefined : Number(leagueSizeValue) });
+  if (!query.success) return context.json({ error: "invalid_request", message: query.error.issues[0]?.message ?? "Invalid report filters" }, 400);
+  return context.json({ reports: await getSleeperReports(database(context), query.data.limit, query.data.researchJobId, query.data.leagueSize) });
 });
 
 app.post("/api/imports/sleeper", async (context) => {
@@ -406,6 +420,7 @@ app.get("/api/rankings/snapshots", async (context) => {
     position: context.req.query("position"),
     leagueSize: leagueSizeValue === undefined ? undefined : Number(leagueSizeValue),
     source: context.req.query("source"),
+    researchJobId: context.req.query("researchJobId"),
     latestPerSource: latestPerSourceValue === undefined
       ? undefined
       : latestPerSourceValue === "true" ? true : latestPerSourceValue === "false" ? false : latestPerSourceValue,
@@ -452,6 +467,26 @@ app.post("/api/rankings/snapshots", requireImportToken, async (context) => {
   }
   const result = await createRankingSnapshot(database(context), input.data);
   return context.json(result, result.created ? 201 : 200);
+});
+
+app.get("/api/research/agents/dashboard", async (context) => {
+  return context.json(await getAgentDashboard(database(context)));
+});
+
+app.get("/api/research/agents/jobs/:jobId/events", async (context) => {
+  return context.json({ events: await getAgentJobEvents(database(context), context.req.param("jobId")) });
+});
+
+app.get("/api/research/agents/settings", async (context) => {
+  return context.json({ settings: await getResearchSettings(database(context)) });
+});
+
+app.put("/api/research/agents/settings", async (context) => {
+  const input = researchSettingsInput.safeParse(await context.req.json().catch(() => null));
+  if (!input.success) {
+    return context.json({ error: "invalid_request", message: input.error.issues[0]?.message ?? "Invalid research settings" }, 400);
+  }
+  return context.json({ settings: await saveResearchSettings(database(context), input.data) });
 });
 
 app.post("/api/research/jobs", async (context) => {
@@ -604,6 +639,17 @@ app.post("/api/runners/jobs/claim", async (context) => {
     return context.json({ error: "runner_identity_mismatch", message: "This credential belongs to another runner." }, 403);
   }
   return context.json({ job: await claimResearchJob(database(context), input.data.runnerId) });
+});
+
+app.post("/api/runners/jobs/:jobId/progress", async (context) => {
+  const input = researchProgressInput.safeParse(await context.req.json().catch(() => null));
+  if (!input.success) {
+    return context.json({ error: "invalid_request", message: input.error.issues[0]?.message ?? "Invalid research progress" }, 400);
+  }
+  if (runnerIdentityMismatch(context, input.data.runnerId)) {
+    return context.json({ error: "runner_identity_mismatch", message: "This credential belongs to another runner." }, 403);
+  }
+  return context.json(await recordResearchProgress(database(context), context.req.param("jobId"), input.data));
 });
 
 app.post("/api/runners/jobs/:jobId/result", async (context) => {

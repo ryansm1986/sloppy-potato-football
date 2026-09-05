@@ -69,6 +69,7 @@ function fakeApi() {
   return {
     heartbeat: vi.fn().mockResolvedValue(undefined),
     claim: vi.fn().mockResolvedValue(job),
+    progress: vi.fn().mockResolvedValue(undefined),
     complete: vi.fn().mockResolvedValue(undefined),
     fail: vi.fn().mockResolvedValue(undefined),
   };
@@ -104,6 +105,7 @@ async function waitForPhase(controller: RunnerController, phase: RunnerControlle
 }
 
 afterEach(async () => {
+  vi.useRealTimers();
   await rm(workspace, { recursive: true, force: true });
   delete process.env.AGENT_RUNNER_TOKEN;
 });
@@ -132,6 +134,57 @@ describe("local runner", () => {
     expect(invocation.env.AGENT_RUNNER_TOKEN).toBeUndefined();
     expect(api.complete).toHaveBeenCalledWith(job.id, job.leaseToken, expect.objectContaining({ summary: validResult.summary }));
     expect(api.fail).not.toHaveBeenCalled();
+    expect(api.progress.mock.calls).toEqual([
+      [job.id, job.leaseToken, "starting"],
+      [job.id, job.leaseToken, "researching"],
+      [job.id, job.leaseToken, "validating"],
+      [job.id, job.leaseToken, "publishing"],
+    ]);
+    expect(api.progress.mock.invocationCallOrder[3]).toBeLessThan(api.complete.mock.invocationCallOrder[0]!);
+  });
+
+  it("continues research when phase reporting is unavailable", async () => {
+    const api = fakeApi();
+    api.progress.mockRejectedValue(new Error("unavailable"));
+    await runOneJob(config, {
+      api: api as unknown as RunnerApiClient,
+      spawn: fakeSpawn(validResult).implementation,
+      log: vi.fn(),
+    });
+    expect(api.progress).toHaveBeenCalledTimes(4);
+    expect(api.complete).toHaveBeenCalledOnce();
+    expect(api.fail).not.toHaveBeenCalled();
+  });
+
+  it("keeps one busy heartbeat in flight and drains it before returning to idle", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const api = fakeApi();
+    let finishPublishing!: () => void;
+    api.complete.mockImplementation(() => new Promise<void>((resolve) => { finishPublishing = resolve; }));
+    let finishHeartbeat!: () => void;
+    let busyCount = 0;
+    api.heartbeat.mockImplementation((status: string) => {
+      if (status === "busy" && ++busyCount > 1) {
+        return new Promise<void>((resolve) => { finishHeartbeat = resolve; });
+      }
+      return Promise.resolve();
+    });
+    const running = runOneJob(config, {
+      api: api as unknown as RunnerApiClient,
+      spawn: fakeSpawn(validResult).implementation,
+      log: vi.fn(),
+    });
+    await vi.waitFor(() => expect(api.complete).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(busyCount).toBe(2);
+    finishPublishing();
+    await Promise.resolve();
+    expect(api.heartbeat.mock.calls.map(([status]) => status)).toEqual(["idle", "busy", "busy"]);
+    finishHeartbeat();
+    await running;
+    expect(api.heartbeat.mock.calls.map(([status]) => status)).toEqual(["idle", "busy", "busy", "idle"]);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(api.heartbeat).toHaveBeenCalledTimes(4);
   });
 
   it("reports schema-invalid Codex output as a retryable failure", async () => {
@@ -147,6 +200,7 @@ describe("local runner", () => {
       code: "INVALID_RESULT",
       retryable: true,
     }));
+    expect(api.progress.mock.calls.map(([, , stage]) => stage)).toEqual(["starting", "researching", "validating"]);
   });
 
   it("stops automatic polling after a rejected credential and remains stoppable", async () => {

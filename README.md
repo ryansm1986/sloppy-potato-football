@@ -43,6 +43,14 @@ pnpm wrangler secret put IMPORT_ADMIN_TOKEN
 
 Send it as `Authorization: Bearer <token>` for protected import, source-registry, and ranking-snapshot writes.
 
+## Agent dashboard and saved research
+
+Open **Agents** for computer status, searchable recent jobs, per-run activity timelines, retry controls, and downloadable JSON logs. The dashboard loads the latest 100 jobs; individual run links also open older jobs. Timelines contain recorded lifecycle stages, not private model reasoning or raw terminal output. Desktop 0.1.10 adds starting, researching, validating, and publishing events; older runs only show events that were recorded at the time.
+
+The **Agent playbook** saves research focus, narrative detail, preferred evidence age, and an independent-source target. These preferences are snapshotted when each job queues (including scheduled jobs); changing the playbook does not rewrite queued or historical assignments. Source count and freshness are evidence targets, not guarantees.
+
+Rankings and Sleepers have **Current / History** controls with dated runs, newer/older navigation, and links to the agent run log. Rankings history groups sources from the same research job; historical aggregate toggles are temporary and do not modify the current aggregate or personal rankings. The history selector starts with the latest 100 ranking snapshots or sleeper reports; direct run links can fetch older saved research.
+
 ## Local research bridge
 
 The Codex runner polls Cloudflare over outbound HTTPS; it never opens a port on your computer. Run the one-time setup after authenticating Wrangler and Codex:

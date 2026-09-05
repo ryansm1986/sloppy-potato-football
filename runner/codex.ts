@@ -81,6 +81,7 @@ export async function executeCodexJob(
   config: RunnerConfig,
   job: ResearchJob,
   spawnImplementation: SpawnImplementation = spawn,
+  onStage?: (stage: "validating") => void | Promise<void>,
 ): Promise<ResearchResult> {
   assertIsolatedWorkspace(config.workspace);
   await mkdir(config.workspace, { recursive: true });
@@ -150,6 +151,8 @@ export async function executeCodexJob(
     throw new CodexExecutionError(`Codex failed: ${detail}`, "CODEX_FAILED", true);
   }
   try {
+    // Observability is best effort and must not invalidate successful research.
+    await Promise.resolve().then(() => onStage?.("validating")).catch(() => undefined);
     const statText = await readFile(outputPath, "utf8");
     if (Buffer.byteLength(statText, "utf8") > OUTPUT_LIMIT_BYTES) {
       throw new Error("result exceeds the 1 MB limit");
