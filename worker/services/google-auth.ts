@@ -232,6 +232,9 @@ export function registerGoogleAuth<T extends { Bindings: AuthBindings; Variables
         const bound = await c.env.DB.prepare("UPDATE auth_desktop_requests SET browser_session_hash = ? WHERE id = ? AND expires_at > ? AND user_id IS NULL")
           .bind(session.tokenHash, flow.desktop_request_id, Date.now()).run();
         if (!bound.meta.changes) throw new AuthError("desktop_request_invalid", "This computer sign-in request expired. Start again in the app.");
+        // no-referrer makes native form POSTs send Origin:null, breaking CSRF.
+        // Send only the HTTPS origin, never the callback path or OAuth query.
+        c.header("Referrer-Policy", "strict-origin");
         return c.html(page("Connect this computer?", `<p>Signed in as <strong>${escapeHtml(user.email)}</strong>.</p><p>Only confirm if you just selected Sign in with Google in your own Sloppy Potato desktop app. This gives that computer access with your ${escapeHtml(user.role)} permissions.</p><form method="post" action="/api/auth/desktop/approve"><input type="hidden" name="requestId" value="${escapeHtml(flow.desktop_request_id)}"><input type="hidden" name="csrfToken" value="${escapeHtml(session.csrfToken)}"><button style="font:inherit;padding:12px 20px;cursor:pointer" type="submit">Confirm this computer</button></form><p><a style="color:#e7bd63" href="/">Cancel and return to the website</a></p>`));
       }
       return c.redirect(`${authOrigin(c.env)}/`);

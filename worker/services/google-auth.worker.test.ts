@@ -222,10 +222,22 @@ describe("invite-only Google access", () => {
     nextGoogleToken = { id_token: jwt };
     const callback = await request(`/api/auth/google/callback?code=desktop-code&state=${authorization.searchParams.get("state")}`, "GET", undefined, { Cookie: googleStart.headers.get("Set-Cookie")!.split(";")[0]! });
     expect(callback.status).toBe(200);
+    // A normal browser form POST gets Origin:null under no-referrer. Keep the
+    // callback URL/code private without suppressing the origin required by CSRF.
+    expect(callback.headers.get("Referrer-Policy")).toBe("strict-origin");
     const confirmation = await callback.text();
     expect(confirmation).toContain("Only confirm if");
     const browserToken = callback.headers.get("Set-Cookie")!.match(/__Host-sp_session=(sp_session_[A-Za-z0-9_-]+)/)![1]!;
     const csrf = confirmation.match(/name="csrfToken" value="([A-Za-z0-9_-]+)"/)![1]!;
+    for (const badOrigin of [undefined, "null", "https://evil.example"]) {
+      const rejected = await app.request(`${origin}/api/auth/desktop/approve`, { method: "POST", headers: { Cookie: `__Host-sp_session=${browserToken}`, ...(badOrigin ? { Origin: badOrigin } : {}), "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ requestId: handoff.requestId, csrfToken: csrf }) }, bindings);
+      expect(rejected.status).toBe(403);
+      expect(await rejected.json()).toMatchObject({ error: "csrf_rejected" });
+    }
+    const badToken = await app.request(`${origin}/api/auth/desktop/approve`, { method: "POST", headers: { Cookie: `__Host-sp_session=${browserToken}`, Origin: origin, "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ requestId: handoff.requestId, csrfToken: "incorrect" }) }, bindings);
+    expect(badToken.status).toBe(403);
+    expect(await badToken.json()).toMatchObject({ error: "csrf_rejected" });
+    expect(await (await request("/api/auth/desktop/poll", "POST", pollBody)).json()).toEqual({ status: "pending" });
     const approve = await app.request(`${origin}/api/auth/desktop/approve`, { method: "POST", headers: { Cookie: `__Host-sp_session=${browserToken}`, Origin: origin, "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ requestId: handoff.requestId, csrfToken: csrf }) }, bindings);
     expect(approve.status).toBe(200);
     expect(await approve.text()).toContain("Computer connected");
